@@ -1,0 +1,11 @@
+<template>
+	<v-app>
+		<v-progress-circular
+			indeterminate
+			color="primary"
+			:size="40"
+			width="2"
+			class="ma-3"
+		></v-progress-circular>
+	</v-app>
+</template>

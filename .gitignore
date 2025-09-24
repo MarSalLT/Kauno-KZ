@@ -1,0 +1,5 @@
+KZ-Server-side/packages/*
+KZ-Server-side/KZ/bin/*
+KZ-Server-side/KZ/obj/*
+KZ-Server-side/KZ/Scripts/*
+KZ-Client-side/app/node_modules/*

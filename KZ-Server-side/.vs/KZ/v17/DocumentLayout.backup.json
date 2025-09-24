@@ -1,0 +1,159 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\kz\\data\\tasksrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\data\\tasksrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|d:\\vp stuff\\kaunas eop\\kz-server-side\\kz\\web.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\web.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\kz\\web.release.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\web.release.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\kz\\web.debug.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\web.debug.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\kz\\data\\userrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\data\\userrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\kz\\controllers\\api\\taskcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\controllers\\api\\taskcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\kz\\controllers\\api\\symbolcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\controllers\\api\\symbolcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\kz\\data\\usersrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\data\\usersrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 1,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedHeight": 15,
+          "SelectedChildIndex": 3,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{d78612c7-9962-4b83-95d9-268046dad23a}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{34e76e81-ee4a-11d0-ae2e-00a0c90fffc3}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "TaskController.cs",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Controllers\\Api\\TaskController.cs",
+              "RelativeDocumentMoniker": "KZ\\Controllers\\Api\\TaskController.cs",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Controllers\\Api\\TaskController.cs",
+              "RelativeToolTip": "KZ\\Controllers\\Api\\TaskController.cs",
+              "ViewState": "AgIAACwAAAAAAAAAAAAswD4AAAAxAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-08-26T05:09:47.805Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "TasksRepository.cs",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Data\\TasksRepository.cs",
+              "RelativeDocumentMoniker": "KZ\\Data\\TasksRepository.cs",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Data\\TasksRepository.cs",
+              "RelativeToolTip": "KZ\\Data\\TasksRepository.cs",
+              "ViewState": "AgIAAGoBAAAAAAAAAAApwIEBAAAQAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-08-26T05:09:22.627Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 6,
+              "Title": "SymbolController.cs",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Controllers\\Api\\SymbolController.cs",
+              "RelativeDocumentMoniker": "KZ\\Controllers\\Api\\SymbolController.cs",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Controllers\\Api\\SymbolController.cs",
+              "RelativeToolTip": "KZ\\Controllers\\Api\\SymbolController.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-06-06T08:27:42.655Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "UserRepository.cs",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Data\\UserRepository.cs",
+              "RelativeDocumentMoniker": "KZ\\Data\\UserRepository.cs",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Data\\UserRepository.cs",
+              "RelativeToolTip": "KZ\\Data\\UserRepository.cs",
+              "ViewState": "AgIAAAkAAAAAAAAAAAASwBkAAAAYAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-05-28T12:34:17.281Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "Web.Debug.config",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Web.Debug.config",
+              "RelativeDocumentMoniker": "KZ\\Web.Debug.config",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Web.Debug.config",
+              "RelativeToolTip": "KZ\\Web.Debug.config",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000601|",
+              "WhenOpened": "2025-05-28T12:35:37.729Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "Web.Release.config",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Web.Release.config",
+              "RelativeDocumentMoniker": "KZ\\Web.Release.config",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Web.Release.config",
+              "RelativeToolTip": "KZ\\Web.Release.config",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000601|",
+              "WhenOpened": "2025-05-28T12:35:36.762Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 7,
+              "Title": "UsersRepository.cs",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Data\\UsersRepository.cs",
+              "RelativeDocumentMoniker": "KZ\\Data\\UsersRepository.cs",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Data\\UsersRepository.cs",
+              "RelativeToolTip": "KZ\\Data\\UsersRepository.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-05-28T12:34:14.377Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "Web.config",
+              "DocumentMoniker": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Web.config",
+              "RelativeDocumentMoniker": "KZ\\Web.config",
+              "ToolTip": "D:\\VP Stuff\\Kaunas EOP\\KZ-Server-side\\KZ\\Web.config",
+              "RelativeToolTip": "KZ\\Web.config",
+              "ViewState": "AgIAAAkAAAAAAAAAAAAAABoAAAAuAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000601|",
+              "WhenOpened": "2025-05-28T12:30:54.759Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

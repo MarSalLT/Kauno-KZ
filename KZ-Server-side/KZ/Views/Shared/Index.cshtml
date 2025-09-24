@@ -1,0 +1,40 @@
+﻿@{
+    if (Model == null)
+    {
+        return;
+    }
+}
+
+<!DOCTYPE html>
+<html lang="lt">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta property="og:title" content="@Model.Title">
+        <meta name="viewport" content="width=device-width,initial-scale=1.0">
+        <title>@Model.Title</title>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:100,300,400,500,700,900">
+        <script src="https://unpkg.com/mapillary-js@4.0.0/dist/mapillary.js"></script>
+        <link rel="stylesheet" href="https://unpkg.com/mapillary-js@4.0.0/dist/mapillary.css">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.css">
+        <script>
+            var appEnv = "production",
+                title = "@Model.Title";
+            if (window.location.protocol != "https:") {
+                window.location.protocol = "https";
+            }
+        </script>
+    </head>
+    <body>
+        <div id="root">
+            <p id="initial-loading-indicator">
+                Kraunasi...
+            </p>
+            <noscript>
+                <p>Svetainei reikalingas JavaScript</p>
+            </noscript>
+        </div>
+        <script src="@Url.Content("~/Scripts/js/chunk-vendors.js?v=" + Model.Version)"></script>
+        <script src="@Url.Content("~/Scripts/js/admin.js?v=" + Model.Version)"></script>
+    </body>
+</html>
