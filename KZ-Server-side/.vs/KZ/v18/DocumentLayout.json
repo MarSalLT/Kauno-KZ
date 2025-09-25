@@ -1,0 +1,62 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\kz\\data\\tasksrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\data\\tasksrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|c:\\users\\marius.salys\\onedrive - uab id vilnius\\desktop\\kaunas_kz\\kz-server-side\\kz\\web.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\web.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 1,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedHeight": 15,
+          "SelectedChildIndex": 2,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{d78612c7-9962-4b83-95d9-268046dad23a}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{34e76e81-ee4a-11d0-ae2e-00a0c90fffc3}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "TasksRepository.cs",
+              "DocumentMoniker": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Data\\TasksRepository.cs",
+              "RelativeDocumentMoniker": "KZ\\Data\\TasksRepository.cs",
+              "ToolTip": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Data\\TasksRepository.cs",
+              "RelativeToolTip": "KZ\\Data\\TasksRepository.cs",
+              "ViewState": "AgIAADIBAAAAAAAAAAAqwEoBAAAfAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-09-24T12:22:06.065Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "Web.config",
+              "DocumentMoniker": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Web.config",
+              "RelativeDocumentMoniker": "KZ\\Web.config",
+              "ToolTip": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Web.config",
+              "RelativeToolTip": "KZ\\Web.config",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAB4AAABPAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000601|",
+              "WhenOpened": "2025-09-24T12:22:06.161Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

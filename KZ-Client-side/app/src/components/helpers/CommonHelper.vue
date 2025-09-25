@@ -35,7 +35,7 @@
 		scUniqueAdvancedContent: ["507", "508", "509", "510", "511", "512", "513", "514", "515", "516", "517", "518", "519", "520", "521", "522", "523", "524", "540", "541", "542", "543", "545", "604", "611", "620", "622", "623", "840", "842", "843", "920", "921", "922", "923", "924"],
 		scUniqueVeryBasicContent: ["117", "118", "304", "314", "315", "316", "317", "318", "319", "329", "330", "529", "530", "531", "540", "541", "542", "543", "545", "546", "612", "615", "617", "620", "801", "802", "803", "804", "805", "806", "809", "810", "811", "824", "825", "826", "828"],
 		sc5XXContent: ["507", "508", "509", "510", "511", "512", "513", "514", "515", "516", "517", "518", "520", "521", "522", "523", "524"],
-		securedServicesUrlMatch: "https://kp.kaunas.lt/image/rest/services/Kelio_zenklai/", // FIXME! Idealiu atveju tą turi gauti iš serverio, nes ten analogiškas naudojamas.. Dabar reikia nustatinėti tiek server-side'e, tiek client-side'e...
+		securedServicesUrlMatch: "https://zemelapiai.vplanas.lt/arcgisin/rest/services/Kelio_zenklai/", // FIXME! Idealiu atveju tą turi gauti iš serverio, nes ten analogiškas naudojamas.. Dabar reikia nustatinėti tiek server-side'e, tiek client-side'e...
 		statsGPUrl: "https://kp.kaunas.lt/image/rest/services/GP_EOPIS/",
 		streetSignsZoomThreshold: 2,
 		symbolsUrl: process.env.VUE_APP_ROOT + "/web-services/" + "symbols/get-symbol?id=",

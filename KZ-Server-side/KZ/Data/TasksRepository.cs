@@ -13,7 +13,6 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Net.Mail;
 using System.Web;
 using System.Web.Configuration;
 using System.Web.WebPages;
@@ -320,76 +319,183 @@ namespace KZ.Data
         }
         public JObject NotifyAboutChangeToTasksSystem(NotifyAboutChangeToTasksSystem model)
         {
+            System.Diagnostics.Debug.WriteLine($"Redmine PART START");
+
             JObject result = new JObject();
             bool status = false;
             JObject taskData = GetTaskData(model.Id, true, false, null, true, true);
             try
             {
-                // https://stackoverflow.com/questions/5420656/unable-to-read-data-from-the-transport-connection-an-existing-connection-was-f
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
-                SmtpClient SmtpServer = new SmtpClient(WebConfigurationManager.AppSettings["SMTPClientServerName"], int.Parse(WebConfigurationManager.AppSettings["SMTPClientServerPort"]))
-                {
-                    UseDefaultCredentials = false,
-                    Credentials = new NetworkCredential(WebConfigurationManager.AppSettings["SMTPNetworkCredentialsEmail"], WebConfigurationManager.AppSettings["SMTPNetworkCredentialsPassword"]),
-                    EnableSsl = true
-                };
-                MailMessage mail = new MailMessage
-                {
-                    From = new MailAddress(WebConfigurationManager.AppSettings["SMTPFrom"])
-                };
-                string to = null;
-                mail.IsBodyHtml = true;
-                mail.BodyEncoding = System.Text.Encoding.UTF8;
-                mail.Subject = "Kauno EOP IS pranešimas";
-                string message = "<table style='border-collapse: collapse;'>";
-                string tdStyle = "style='border: 1px solid #eeeeee; padding: 5px;'";
-                if (taskData.ContainsKey("attributes"))
-                {
-                    JObject fields = GetFields();
-                    JObject attributes = (JObject)taskData["attributes"];
-                    foreach (var attribute in attributes)
-                    {
-                        message += "<tr><td " + tdStyle + ">" + GetFieldName(attribute.Key, fields) + "</td><td " + tdStyle + ">" + GetFieldValue(attribute.Key, attributes, fields) + "</td></tr>";
-                        if (attribute.Key.Equals("Imone"))
-                        {
-                            to = WebConfigurationManager.AppSettings["SMTPTo" + attribute.Value.ToString()];
-                        }
-                    }
-                }
-                if (taskData.ContainsKey("attachments"))
-                {
-                    JArray attachments = (JArray)taskData["attachments"];
-                    if (attachments.Count > 0)
-                    {
-                        message += "<div style='margin-top: 20px;'>" + "Nuorodos į susijusius failus:" + "</div>";
-                        foreach (JObject attachment in attachments)
-                        {
-                            if (attachment.ContainsKey("url"))
-                            {
-                                message += "<div style='margin-top: 20px;'><a href='" + attachment["url"] + "'>" + attachment["url"] + "</a></div>";
-                            }
-                        }
-                    }
-                }
-                message += "</table>";
-                mail.Body = message;
-                if (to == null || to.IsEmpty())
-                {
-                    to = WebConfigurationManager.AppSettings["SMTPToGeneral"];
-                }
-                mail.To.Add(to);
-                SmtpServer.Send(mail);
-                status = true;
+                status = CreateRedmineIssue(taskData);
             }
             catch (Exception e)
             {
-                result.Add("ERR", e.ToString()); // For testing problems...
+                result.Add("ERR", e.ToString());
             }
             if (status)
             {
                 result.Add("status", "OK");
             }
+            else
+            {
+                result.Add("status", "FAILED");
+            }
             return result;
+        }
+
+        private bool CreateRedmineIssue(JObject taskData)
+        {
+            try
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+
+                string redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"];
+                string apiKey = WebConfigurationManager.AppSettings["RedmineApiKey"];
+                string projectId = WebConfigurationManager.AppSettings["RedmineProjectId"];
+
+                // Log configuration for debugging
+                System.Diagnostics.Debug.WriteLine($"Redmine URL: {redmineUrl}");
+                System.Diagnostics.Debug.WriteLine($"API Key: {apiKey?.Substring(0, 8)}...");
+                System.Diagnostics.Debug.WriteLine($"Project ID: {projectId}");
+
+                if (string.IsNullOrEmpty(redmineUrl) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(projectId))
+                {
+                    throw new Exception("Redmine configuration is incomplete. Check RedmineApiUrl, RedmineApiKey, and RedmineProjectId in Web.config");
+                }
+
+                RestClient client = new RestClient(redmineUrl);
+                RestRequest request = new RestRequest("issues.json", Method.POST);
+                request.AddHeader("X-Redmine-API-Key", apiKey);
+                request.AddHeader("Content-Type", "application/json");
+
+                JObject issue = new JObject();
+                JObject issueData = new JObject();
+
+                string subject = "Kauno KZ užduotis";
+                string description = "";
+                int priorityId = 2; // Normal priority by default
+                int trackerId = 1; // Default tracker
+
+                if (taskData.ContainsKey("attributes"))
+                {
+                    JObject fields = GetFields();
+                    JObject attributes = (JObject)taskData["attributes"];
+
+                    // Set subject from task title
+                    if (attributes.ContainsKey("Pavadinimas") && attributes["Pavadinimas"] != null)
+                    {
+                        subject = attributes["Pavadinimas"].ToString();
+                    }
+
+                    // Build description from task attributes
+                    description = "Kauno kelio ženklų sistema - užduoties informacija:\n\n";
+                    foreach (var attribute in attributes)
+                    {
+                        string fieldName = GetFieldName(attribute.Key, fields);
+                        string fieldValue = GetFieldValue(attribute.Key, attributes, fields);
+                        description += $"**{fieldName}**: {fieldValue}\n";
+                    }
+
+                    // Map priority from task importance
+                    if (attributes.ContainsKey("Svarba") && attributes["Svarba"] != null)
+                    {
+                        string priorityMapping = WebConfigurationManager.AppSettings["RedminePriorityIdMapping"];
+                        string taskPriority = attributes["Svarba"].ToString();
+                        priorityId = GetRedmineMappedValue(priorityMapping, taskPriority, 2);
+                    }
+
+                    // Map tracker from task type
+                    if (attributes.ContainsKey("Uzduoties_tipas") && attributes["Uzduoties_tipas"] != null)
+                    {
+                        string trackerMapping = WebConfigurationManager.AppSettings["RedmineTrackerIdMapping"];
+                        string taskType = attributes["Uzduoties_tipas"].ToString().ToLower();
+                        trackerId = GetRedmineMappedValue(trackerMapping, taskType, 1);
+                    }
+
+                    // Add URL to original task
+                    if (attributes.ContainsKey("URL") && attributes["URL"] != null)
+                    {
+                        description += $"\n**Nuoroda į originalų užduotį**: {attributes["URL"]}\n";
+                    }
+                }
+
+                // Add attachment links
+                if (taskData.ContainsKey("attachments"))
+                {
+                    JArray attachments = (JArray)taskData["attachments"];
+                    if (attachments.Count > 0)
+                    {
+                        description += "\n**Susijusių failų nuorodos**:\n";
+                        foreach (JObject attachment in attachments)
+                        {
+                            if (attachment.ContainsKey("url"))
+                            {
+                                description += $"- {attachment["url"]}\n";
+                            }
+                        }
+                    }
+                }
+
+                issueData.Add("project_id", projectId);
+                issueData.Add("subject", subject);
+                issueData.Add("description", description);
+                issueData.Add("priority_id", priorityId);
+                issueData.Add("tracker_id", trackerId);
+
+                issue.Add("issue", issueData);
+
+                string jsonPayload = issue.ToString();
+                System.Diagnostics.Debug.WriteLine($"JSON Payload: {jsonPayload}");
+
+                request.AddParameter("application/json", jsonPayload, ParameterType.RequestBody);
+
+                IRestResponse response = client.Execute(request);
+
+                // Log detailed response information
+                System.Diagnostics.Debug.WriteLine($"Response Status: {response.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"Response Content: {response.Content}");
+                System.Diagnostics.Debug.WriteLine($"Response Error: {response.ErrorMessage}");
+
+                if (response.StatusCode == HttpStatusCode.Created)
+                {
+                    System.Diagnostics.Debug.WriteLine("Redmine issue created successfully!");
+                    return true;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to create Redmine issue. Status: {response.StatusCode}, Content: {response.Content}");
+                    return false;
+                }
+            }
+            catch (Exception e)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in CreateRedmineIssue: {e.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack trace: {e.StackTrace}");
+                return false;
+            }
+        }
+
+        private int GetRedmineMappedValue(string mapping, string key, int defaultValue)
+        {
+            if (string.IsNullOrEmpty(mapping) || string.IsNullOrEmpty(key))
+                return defaultValue;
+
+            string[] mappings = mapping.Split(',');
+            foreach (string map in mappings)
+            {
+                string[] parts = map.Split(':');
+                if (parts.Length == 2 && parts[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(parts[1].Trim(), out int result))
+                        return result;
+                }
+            }
+            return defaultValue;
+        }
+
+        public bool TestCreateRedmineIssue(JObject testTaskData)
+        {
+            return CreateRedmineIssue(testTaskData);
         }
         public List<Dictionary<string, object>> GetTasksListForUser()
         {

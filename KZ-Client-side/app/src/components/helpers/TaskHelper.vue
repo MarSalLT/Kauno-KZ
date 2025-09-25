@@ -223,16 +223,16 @@
 			return promise;
 		},
 
-		notifyAboutTaskChangeToEinpix: function(featureProperties, force){
+		notifyAboutTaskChangeToEinpix: function(featureProperties){
 			var doNotify;
 			if (featureProperties) {
 				var globalId = featureProperties["GlobalID"];
 				if (globalId) {
 					globalId = CommonHelper.stripGuid(globalId);
 					// Hmmm... Gal nelabai galima čia pasikliauti užduoties statusu?.. Ar galima? O jei kažkas jį pakeitė kitame tab'e ar pan?.. Gal geriau serverio pusėje tą statusą tikrinti??... FIXME!!!
-					if ((featureProperties["Statusas"] != "0") || force) {
+					//if ((featureProperties["Statusas"] != "0") || force) {
 						doNotify = true;
-					}
+					//}
 				} else {
 					console.warn("notifyAboutTaskChangeToEinpix failed...");
 				}
