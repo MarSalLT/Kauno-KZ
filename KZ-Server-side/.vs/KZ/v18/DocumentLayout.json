@@ -3,11 +3,15 @@
   "WorkspaceRootPath": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\kz\\data\\tasksrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|c:\\users\\marius.salys\\onedrive - uab id vilnius\\desktop\\kaunas_kz\\kz-server-side\\kz\\data\\tasksrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\data\\tasksrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|c:\\users\\marius.salys\\onedrive - uab id vilnius\\desktop\\kaunas_kz\\kz-server-side\\kz\\web.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\kz\\controllers\\api\\taskcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\controllers\\api\\taskcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\kz\\web.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
       "RelativeMoniker": "D:0:0:{75CFFEE7-DA56-44F3-9A52-DC08257CB3CD}|KZ\\KZ.csproj|solutionrelative:kz\\web.config||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
     }
   ],
@@ -18,7 +22,7 @@
       "DocumentGroups": [
         {
           "DockedHeight": 15,
-          "SelectedChildIndex": 2,
+          "SelectedChildIndex": 3,
           "Children": [
             {
               "$type": "Bookmark",
@@ -30,26 +34,39 @@
             },
             {
               "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "TaskController.cs",
+              "DocumentMoniker": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Controllers\\Api\\TaskController.cs",
+              "RelativeDocumentMoniker": "KZ\\Controllers\\Api\\TaskController.cs",
+              "ToolTip": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Controllers\\Api\\TaskController.cs",
+              "RelativeToolTip": "KZ\\Controllers\\Api\\TaskController.cs",
+              "ViewState": "AgIAAEsAAAAAAAAAAAAgwG0AAAAJAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-10-01T11:25:11.501Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
               "DocumentIndex": 0,
               "Title": "TasksRepository.cs",
               "DocumentMoniker": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Data\\TasksRepository.cs",
               "RelativeDocumentMoniker": "KZ\\Data\\TasksRepository.cs",
               "ToolTip": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Data\\TasksRepository.cs",
               "RelativeToolTip": "KZ\\Data\\TasksRepository.cs",
-              "ViewState": "AgIAADIBAAAAAAAAAAAqwEoBAAAfAAAAAAAAAA==",
+              "ViewState": "AgIAAIcBAAAAAAAAAAAqwI4BAAARAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2025-09-24T12:22:06.065Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 2,
               "Title": "Web.config",
               "DocumentMoniker": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Web.config",
               "RelativeDocumentMoniker": "KZ\\Web.config",
               "ToolTip": "C:\\Users\\Marius.Salys\\OneDrive - UAB ID VILNIUS\\Desktop\\kaunas_kz\\KZ-Server-side\\KZ\\Web.config",
               "RelativeToolTip": "KZ\\Web.config",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAB4AAABPAAAAAAAAAA==",
+              "ViewState": "AgIAAA8AAAAAAAAAAAAAABoAAAAsAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000601|",
               "WhenOpened": "2025-09-24T12:22:06.161Z",
               "EditorCaption": ""

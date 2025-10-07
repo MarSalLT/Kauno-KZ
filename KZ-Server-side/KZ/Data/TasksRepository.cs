@@ -323,14 +323,41 @@ namespace KZ.Data
 
             JObject result = new JObject();
             bool status = false;
+
+            
+
+            System.Diagnostics.Debug.WriteLine($"Getting task data for task ID: {model.Id}");
             JObject taskData = GetTaskData(model.Id, true, false, null, true, true);
+
+            System.Diagnostics.Debug.WriteLine($"Task data retrieved: {(taskData != null ? "Yes" : "No")}");
+            System.Diagnostics.Debug.WriteLine(taskData);
+
+            System.Diagnostics.Debug.WriteLine("Calling GetRedmineIssueId...");
+            int redmineIssueID = GetRedmineIssueId(model.Id);
+            System.Diagnostics.Debug.WriteLine($"GetRedmineIssueId returned: {redmineIssueID}");
+
             try
             {
-                status = CreateRedmineIssue(taskData);
+                if (redmineIssueID > 0)
+                {
+                    // Update existing Redmine issue
+                    System.Diagnostics.Debug.WriteLine($"Updating existing Redmine issue: {redmineIssueID}");
+                    status = UpdateRedmineIssue(redmineIssueID, taskData);
+                    result.Add("action", "updated");
+                    result.Add("issue_id", redmineIssueID);
+                }
+                else
+                {
+                    // Create new Redmine issue
+                    System.Diagnostics.Debug.WriteLine("Creating new Redmine issue");
+                    status = CreateRedmineIssue(taskData);
+                    result.Add("action", "created");
+                }
             }
             catch (Exception e)
             {
                 result.Add("ERR", e.ToString());
+                System.Diagnostics.Debug.WriteLine($"Error in NotifyAboutChangeToTasksSystem: {e.Message}");
             }
             if (status)
             {
@@ -341,6 +368,61 @@ namespace KZ.Data
                 result.Add("status", "FAILED");
             }
             return result;
+        }
+
+        private int GetRedmineIssueId(string taskId)
+        {
+            int issueID = 0;
+            System.Diagnostics.Debug.WriteLine("GetRedmineIssueId START");
+
+            try
+            {
+                int customFieldId = 1;
+
+                System.Diagnostics.Debug.WriteLine($"GetRedmineIssueId: Searching for task {taskId} using custom field {customFieldId}");
+
+                string redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"];
+                string apiKey = WebConfigurationManager.AppSettings["RedmineApiKey"];
+                string projectId = WebConfigurationManager.AppSettings["RedmineProjectId"];
+
+                string searchUrl = $"issues.json?cf_{customFieldId}={taskId}&project_id={projectId}";
+                System.Diagnostics.Debug.WriteLine($"GetRedmineIssueId: Search URL: {searchUrl}");
+
+                RestClient client = new RestClient(redmineUrl);
+                RestRequest request = new RestRequest(searchUrl, Method.GET);
+                request.AddHeader("X-Redmine-API-Key", apiKey);
+                request.AddHeader("Content-Type", "application/json");
+
+                IRestResponse response = client.Execute(request);
+
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    JObject result = JObject.Parse(response.Content);
+                    if (result.ContainsKey("issues"))
+                    {
+                        JArray issues = (JArray)result["issues"];
+                        if (issues.Count > 0)
+                        {
+                            JObject issue = (JObject)issues[0];
+                            if (issue.ContainsKey("id"))
+                            {
+                                issueID = (int)issue["id"];
+                                System.Diagnostics.Debug.WriteLine($"Found existing Redmine issue: {issueID} for task: {taskId}");
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to search Redmine issues. Status: {response.StatusCode}, Content: {response.Content}");
+                }
+            }
+            catch (Exception e)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in GetRedmineIssueId: {e.Message}");
+            }
+
+            return issueID;
         }
 
         private bool CreateRedmineIssue(JObject taskData)
@@ -442,6 +524,40 @@ namespace KZ.Data
                 issueData.Add("priority_id", priorityId);
                 issueData.Add("tracker_id", trackerId);
 
+                // Add task ID as custom field
+                int customFieldId = 1; // Hardcoded for now, should match your Redmine custom field ID
+                string taskId = "";
+
+                if (taskData.ContainsKey("attributes"))
+                {
+                    JObject attributes = (JObject)taskData["attributes"];
+                    if (attributes.ContainsKey("GlobalID") && attributes["GlobalID"] != null && !string.IsNullOrEmpty(attributes["GlobalID"].ToString()))
+                    {
+                        taskId = attributes["GlobalID"].ToString();
+                    }
+                }
+
+                // If GlobalID is empty, we need to get it from the original task ID passed to NotifyAboutChangeToTasksSystem
+                // For now, let's check if we can extract it from the taskData or use another identifier
+                if (string.IsNullOrEmpty(taskId))
+                {
+                    System.Diagnostics.Debug.WriteLine("WARNING: GlobalID is empty in attributes, cannot set custom field");
+                }
+                else
+                {
+                    // Remove curly braces if present
+                    taskId = taskId.Replace("{", "").Replace("}", "");
+
+                    JArray customFields = new JArray();
+                    JObject customField = new JObject();
+                    customField.Add("id", customFieldId);
+                    customField.Add("value", taskId);
+                    customFields.Add(customField);
+                    issueData.Add("custom_fields", customFields);
+
+                    System.Diagnostics.Debug.WriteLine($"Adding custom field {customFieldId} with value: {taskId}");
+                }
+
                 issue.Add("issue", issueData);
 
                 string jsonPayload = issue.ToString();
@@ -459,6 +575,40 @@ namespace KZ.Data
                 if (response.StatusCode == HttpStatusCode.Created)
                 {
                     System.Diagnostics.Debug.WriteLine("Redmine issue created successfully!");
+
+                    // Parse response to verify custom field was saved
+                    try
+                    {
+                        JObject responseData = JObject.Parse(response.Content);
+                        if (responseData.ContainsKey("issue"))
+                        {
+                            JObject createdIssue = (JObject)responseData["issue"];
+                            System.Diagnostics.Debug.WriteLine($"Created issue ID: {createdIssue["id"]}");
+
+                            if (createdIssue.ContainsKey("custom_fields"))
+                            {
+                                JArray customFieldsResponse = (JArray)createdIssue["custom_fields"];
+                                System.Diagnostics.Debug.WriteLine($"Custom fields in response: {customFieldsResponse.ToString()}");
+
+                                foreach (JObject cf in customFieldsResponse)
+                                {
+                                    if (cf["id"].ToString() == customFieldId.ToString())
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Custom field {customFieldId} value in created issue: {cf["value"]}");
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine("WARNING: No custom_fields in response");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error parsing response: {ex.Message}");
+                    }
+
                     return true;
                 }
                 else
@@ -470,6 +620,129 @@ namespace KZ.Data
             catch (Exception e)
             {
                 System.Diagnostics.Debug.WriteLine($"Exception in CreateRedmineIssue: {e.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack trace: {e.StackTrace}");
+                return false;
+            }
+        }
+
+        private bool UpdateRedmineIssue(int issueId, JObject taskData)
+        {
+            try
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
+
+                string redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"];
+                string apiKey = WebConfigurationManager.AppSettings["RedmineApiKey"];
+
+                if (string.IsNullOrEmpty(redmineUrl) || string.IsNullOrEmpty(apiKey))
+                {
+                    throw new Exception("Redmine configuration is incomplete. Check RedmineApiUrl and RedmineApiKey in Web.config");
+                }
+
+                RestClient client = new RestClient(redmineUrl);
+                RestRequest request = new RestRequest($"issues/{issueId}.json", Method.PUT);
+                request.AddHeader("X-Redmine-API-Key", apiKey);
+                request.AddHeader("Content-Type", "application/json");
+
+                JObject issue = new JObject();
+                JObject issueData = new JObject();
+
+                string subject = "Kauno KZ užduotis";
+                string description = "";
+                int priorityId = 2;
+                int trackerId = 1;
+
+                if (taskData.ContainsKey("attributes"))
+                {
+                    JObject fields = GetFields();
+                    JObject attributes = (JObject)taskData["attributes"];
+
+                    // Set subject from task title
+                    if (attributes.ContainsKey("Pavadinimas") && attributes["Pavadinimas"] != null)
+                    {
+                        subject = attributes["Pavadinimas"].ToString();
+                    }
+
+                    // Build description from task attributes
+                    description = "Kauno kelio ženklų sistema - užduoties informacija:\n\n";
+                    foreach (var attribute in attributes)
+                    {
+                        string fieldName = GetFieldName(attribute.Key, fields);
+                        string fieldValue = GetFieldValue(attribute.Key, attributes, fields);
+                        description += $"**{fieldName}**: {fieldValue}\n";
+                    }
+
+                    // Map priority from task importance
+                    if (attributes.ContainsKey("Svarba") && attributes["Svarba"] != null)
+                    {
+                        string priorityMapping = WebConfigurationManager.AppSettings["RedminePriorityIdMapping"];
+                        string taskPriority = attributes["Svarba"].ToString();
+                        priorityId = GetRedmineMappedValue(priorityMapping, taskPriority, 2);
+                    }
+
+                    // Map tracker from task type
+                    if (attributes.ContainsKey("Uzduoties_tipas") && attributes["Uzduoties_tipas"] != null)
+                    {
+                        string trackerMapping = WebConfigurationManager.AppSettings["RedmineTrackerIdMapping"];
+                        string taskType = attributes["Uzduoties_tipas"].ToString().ToLower();
+                        trackerId = GetRedmineMappedValue(trackerMapping, taskType, 1);
+                    }
+
+                    // Add URL to original task
+                    if (attributes.ContainsKey("URL") && attributes["URL"] != null)
+                    {
+                        description += $"\n**Nuoroda į originalų užduotį**: {attributes["URL"]}\n";
+                    }
+                }
+
+                // Add attachment links
+                if (taskData.ContainsKey("attachments"))
+                {
+                    JArray attachments = (JArray)taskData["attachments"];
+                    if (attachments.Count > 0)
+                    {
+                        description += "\n**Susijusių failų nuorodos**:\n";
+                        foreach (JObject attachment in attachments)
+                        {
+                            if (attachment.ContainsKey("url"))
+                            {
+                                description += $"- {attachment["url"]}\n";
+                            }
+                        }
+                    }
+                }
+
+                issueData.Add("subject", subject);
+                issueData.Add("description", description);
+                issueData.Add("priority_id", priorityId);
+                issueData.Add("tracker_id", trackerId);
+
+                issue.Add("issue", issueData);
+
+                string jsonPayload = issue.ToString();
+                System.Diagnostics.Debug.WriteLine($"Update JSON Payload: {jsonPayload}");
+
+                request.AddParameter("application/json", jsonPayload, ParameterType.RequestBody);
+
+                IRestResponse response = client.Execute(request);
+
+                System.Diagnostics.Debug.WriteLine($"Update Response Status: {response.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"Update Response Content: {response.Content}");
+
+                if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.NoContent)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Redmine issue {issueId} updated successfully!");
+                    return true;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to update Redmine issue {issueId}. Status: {response.StatusCode}, Content: {response.Content}");
+                    return false;
+                }
+            }
+            catch (Exception e)
+            {
+                System.Diagnostics.Debug.WriteLine($"Exception in UpdateRedmineIssue: {e.Message}");
                 System.Diagnostics.Debug.WriteLine($"Stack trace: {e.StackTrace}");
                 return false;
             }
@@ -493,10 +766,6 @@ namespace KZ.Data
             return defaultValue;
         }
 
-        public bool TestCreateRedmineIssue(JObject testTaskData)
-        {
-            return CreateRedmineIssue(testTaskData);
-        }
         public List<Dictionary<string, object>> GetTasksListForUser()
         {
             List<Dictionary<string, object>> list = null;
