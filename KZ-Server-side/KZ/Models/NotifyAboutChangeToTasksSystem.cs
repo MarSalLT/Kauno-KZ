@@ -9,5 +9,6 @@ namespace KZ.Models
         [Required]
         public string Id { get; set; }
         public bool Attachment { get; set; }
+        public string ActionType { get; set; }
     }
 }

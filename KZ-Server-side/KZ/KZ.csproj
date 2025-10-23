@@ -168,6 +168,7 @@
     <Compile Include="Controllers\Api\UserManagementController.cs" />
     <Compile Include="Controllers\Api\UsersDataController.cs" />
     <Compile Include="Controllers\IndexController.cs" />
+    <Compile Include="Controllers\RedmineWebhookController.cs" />
     <Compile Include="Controllers\Api\SymbolController.cs" />
     <Compile Include="Data\AttachmentInfoRepository.cs" />
     <Compile Include="Data\CustomPrincipal.cs" />
@@ -180,6 +181,7 @@
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
+    <Compile Include="Services\CamundaProcessService.cs" />
     <Compile Include="Models\AttachmentInfoSaveDataModel.cs" />
     <Compile Include="Models\DeleteUserModel.cs" />
     <Compile Include="Models\ApplyEditsModel.cs" />
@@ -189,6 +191,7 @@
     <Compile Include="Models\SCDeleteItemModel.cs" />
     <Compile Include="Models\SCSaveDataModel.cs" />
     <Compile Include="Models\ServiceModel.cs" />
+    <Compile Include="Models\TaskApprovalOrRejectionModel.cs" />
     <Compile Include="Models\TaskModel.cs" />
     <Compile Include="Models\TaskUserModel.cs" />
     <Compile Include="Models\UserModel.cs" />

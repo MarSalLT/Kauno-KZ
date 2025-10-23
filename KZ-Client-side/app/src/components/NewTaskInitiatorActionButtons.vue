@@ -406,9 +406,10 @@
 						this.getTaskData(this.feature).then(function(taskData){
 							var taskGlobalId = taskData["GlobalID"];
 							if (action == "approve") {
-								if ((taskData["Statusas"] == "4") && (taskData["Patvirtinimas"] == 1)) {
+								if ((taskData["Statusas"] == "2") && (taskData["Patvirtinimas"] == 1)) {
+									// Clear interval immediately to prevent multiple triggers
+									window.clearInterval(task);
 									setTimeout(function(){
-										window.clearInterval(task);
 										dialog.loading = false;
 										dialog.dialog = false;
 										this.$vBus.$emit("show-message", {
@@ -421,16 +422,26 @@
 										}, function(){
 											// ...
 										});
-										this.myMap.map.getLayers().forEach(function(layer){
-											if (layer.service && (layer.service.id == "street-signs-vertical" || layer.service.id == "street-signs")) {
-												layer.service.timestamp = Date.now();
-												if (layer.getLayers) {
-													layer.getLayers().forEach(function(l){
-														l.getSource().refresh();
-													});
+										try {
+											this.myMap.map.getLayers().forEach(function(layer){
+												if (layer.service && (layer.service.id == "street-signs-vertical" || layer.service.id == "street-signs")) {
+													layer.service.timestamp = Date.now();
+													if (layer.getLayers && typeof layer.getLayers === 'function') {
+														layer.getLayers().forEach(function(l){
+															if (l && l.getSource && typeof l.getSource === 'function') {
+																try {
+																	l.getSource().refresh();
+																} catch (e) {
+																	console.warn("Could not refresh layer source:", e);
+																}
+															}
+														});
+													}
 												}
-											}
-										});
+											});
+										} catch (e) {
+											console.warn("Error refreshing map layers:", e);
+										}
 									}.bind(this), 15000);
 								}
 							} else if (action == "reject") {
@@ -503,7 +514,7 @@
 									this.$store.commit("setActiveTask", { // FIXME! Gal tai overkill'as? Gal reiktų tyliai gauti naują užduoties info ir koreguoti this.e???
 										globalId: globalId
 									});
-									TaskHelper.notifyAboutTaskChangeToEinpix(feature.getProperties()).then(function(){
+									TaskHelper.notifyAboutTaskChangeToEinpix(feature.getProperties(), "cancel_task").then(function(){
 										// ...
 									}, function(reason){
 										console.warn("Notification failed... Reason:", reason);

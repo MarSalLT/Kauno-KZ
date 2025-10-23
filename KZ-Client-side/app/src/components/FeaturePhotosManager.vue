@@ -201,7 +201,7 @@
 						this.$vBus.$emit("feature-photos-modified", this.e);
 						if (this.e.featureType == "tasks") {
 							this.getData(); // Užduočių atveju nėra iškart matomos galerijos, tad vartotojui reiktų vėl parodyti visą attachment'ų sąrašą... Kad vizualiai įsitikintų, kad kažkas pasikeitė...
-							TaskHelper.notifyAboutTaskChangeToEinpix(this.e.feature.getProperties());
+							TaskHelper.notifyAboutTaskChangeToEinpix(this.e.feature.getProperties(), "photo_upload");
 						} else {
 							this.onClose();
 						}

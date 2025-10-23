@@ -162,7 +162,7 @@
 											}, keywords).then(function(){
 												this.saveInProgress = false;
 												this.dialog = false;
-												TaskHelper.notifyAboutTaskChangeToEinpix(this.e.task.feature.getProperties());
+												TaskHelper.notifyAboutTaskChangeToEinpix(this.e.task.feature.getProperties(), "attachment_edit");
 												this.$vBus.$emit("refresh-feature-photos-manager-dialog");
 											}.bind(this), function(){
 												this.saveInProgress = false;
@@ -183,7 +183,7 @@
 												var onSuccess = function(){
 													this.saveInProgress = false;
 													this.dialog = false;
-													TaskHelper.notifyAboutTaskChangeToEinpix(this.e.task.feature.getProperties());
+													TaskHelper.notifyAboutTaskChangeToEinpix(this.e.task.feature.getProperties(), "attachment_edit");
 													this.$vBus.$emit("refresh-feature-photos-manager-dialog");
 												}.bind(this);
 												if (this.e.masterAttachment) {

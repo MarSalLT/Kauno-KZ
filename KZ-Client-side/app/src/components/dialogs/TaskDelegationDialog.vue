@@ -129,7 +129,7 @@
 				if (this.taskData && this.taskData.attributes) {
 					if (this.taskData.attributes["Pabaigos_data"] && (this.taskData.attributes["Pabaigos_data"] > Date.now())) {
 						this.delegationInProgress = true;
-						TaskHelper.notifyAboutTaskChangeToEinpix(this.taskData.attributes, true).then(function(response){
+						TaskHelper.notifyAboutTaskChangeToEinpix(this.taskData.attributes, "delegation").then(function(response){
 							this.delegationInProgress = false;
 							if (response && (response.status == "OK")) {
 								this.$vBus.$emit("show-message", {

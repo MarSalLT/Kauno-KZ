@@ -399,7 +399,7 @@
 											this.$store.commit("setActiveTask", { // FIXME! Gal tai overkill'as? Gal reiktų tyliai gauti naują užduoties info ir koreguoti this.e???
 												globalId: globalId
 											});
-											TaskHelper.notifyAboutTaskChangeToEinpix(featureToSave.getProperties()).then(function(){
+											TaskHelper.notifyAboutTaskChangeToEinpix(featureToSave.getProperties(), "new_task").then(function(){
 												// ...
 											}, function(reason){
 												console.warn("Notification failed... Reason:", reason);
@@ -416,7 +416,7 @@
 											this.$store.commit("setActiveTask", { // FIXME! Gal tai overkill'as? Gal reiktų tyliai gauti naują užduoties info ir koreguoti this.e???
 												globalId: globalId
 											});
-											TaskHelper.notifyAboutTaskChangeToEinpix(featureToSave.getProperties()).then(function(){
+											TaskHelper.notifyAboutTaskChangeToEinpix(featureToSave.getProperties(), "update").then(function(){
 												// ...
 											}, function(reason){
 												console.warn("Notification failed... Reason:", reason);

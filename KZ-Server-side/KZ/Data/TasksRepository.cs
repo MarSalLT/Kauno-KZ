@@ -8,22 +8,174 @@ using RestSharp;
 using System;
 using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading.Tasks;
 using System.Web;
 using System.Web.Configuration;
 using System.Web.WebPages;
 using TheArtOfDev.HtmlRenderer.Core.Entities;
 using TheArtOfDev.HtmlRenderer.PdfSharp;
 
+
+
 namespace KZ.Data
 {
     public class TasksRepository
     {
         private readonly string tablePart1 = WebConfigurationManager.AppSettings["TableFirstPart"];
+        private static string _cachedCsrfToken = null;
+        private static string _cachedCsrfCookie = null;
+        private static string _cachedJSessionId = null;
+        private static DateTime _tokenExpiry = DateTime.MinValue;
+        private static readonly HttpClient _httpClient = new HttpClient();
+
+        private async Task<string> GetCsrfToken(string camundaUrl)
+        {
+            // Return cached token if still valid (cache for 5 minutes)
+            if (_cachedCsrfToken != null && DateTime.UtcNow < _tokenExpiry)
+            {
+                return _cachedCsrfToken;
+            }
+
+            try
+            {
+                // Fetch CSRF token by making a GET request to Camunda /version endpoint
+                // Note: Even if endpoint returns 404, Camunda includes X-CSRF-Token in headers
+                var versionUrl = camundaUrl.TrimEnd('/') + "/version";
+                var request = new HttpRequestMessage(HttpMethod.Get, versionUrl);
+
+                // Check if basic auth credentials are configured
+                var camundaUsername = WebConfigurationManager.AppSettings["CamundaUsername"];
+                var camundaPassword = WebConfigurationManager.AppSettings["CamundaPassword"];
+
+                if (!string.IsNullOrEmpty(camundaUsername) && !string.IsNullOrEmpty(camundaPassword))
+                {
+                    var authBytes = System.Text.Encoding.UTF8.GetBytes($"{camundaUsername}:{camundaPassword}");
+                    var authHeader = Convert.ToBase64String(authBytes);
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Basic", authHeader);
+                }
+
+                var response = await _httpClient.SendAsync(request);
+                // Don't throw on non-success - we just need the CSRF token from headers
+
+                // Extract CSRF token from response headers (works even on 404)
+                // Camunda returns the token as X-XSRF-TOKEN header
+                if (response.Headers.Contains("X-XSRF-TOKEN"))
+                {
+                    _cachedCsrfToken = response.Headers.GetValues("X-XSRF-TOKEN").FirstOrDefault();
+                    _tokenExpiry = DateTime.UtcNow.AddMinutes(5);
+
+                    // Also extract cookies (Double Submit Cookie pattern + session)
+                    if (response.Headers.Contains("Set-Cookie"))
+                    {
+                        var cookies = response.Headers.GetValues("Set-Cookie");
+                        foreach (var cookie in cookies)
+                        {
+                            if (cookie.Contains("XSRF-TOKEN="))
+                            {
+                                // Extract just the cookie value part (XSRF-TOKEN=value)
+                                var cookieValue = cookie.Split(';')[0];
+                                _cachedCsrfCookie = cookieValue;
+                                Debug.WriteLine($"✓ Fetched CSRF cookie: {_cachedCsrfCookie}");
+                            }
+                            else if (cookie.Contains("JSESSIONID="))
+                            {
+                                // Also extract JSESSIONID for session management
+                                var cookieValue = cookie.Split(';')[0];
+                                _cachedJSessionId = cookieValue;
+                                Debug.WriteLine($"✓ Fetched JSESSIONID: {_cachedJSessionId}");
+                            }
+                        }
+                    }
+
+                    Debug.WriteLine($"✓ Fetched CSRF token: {_cachedCsrfToken} (Status: {response.StatusCode})");
+                    return _cachedCsrfToken;
+                }
+
+                Debug.WriteLine($"Warning: No CSRF token found in X-XSRF-TOKEN header (Status: {response.StatusCode})");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to fetch CSRF token: {ex.Message}");
+                return null;
+            }
+        }
+
+        private void AddCamundaAuthHeaders(RestRequest request, string camundaUrl)
+        {
+            // Add basic auth if configured
+            var camundaUsername = WebConfigurationManager.AppSettings["CamundaUsername"];
+            var camundaPassword = WebConfigurationManager.AppSettings["CamundaPassword"];
+
+            if (!string.IsNullOrEmpty(camundaUsername) && !string.IsNullOrEmpty(camundaPassword))
+            {
+                var authBytes = System.Text.Encoding.UTF8.GetBytes($"{camundaUsername}:{camundaPassword}");
+                var authHeader = Convert.ToBase64String(authBytes);
+                request.AddHeader("Authorization", $"Basic {authHeader}");
+            }
+
+            // Add CSRF token (get it synchronously using ConfigureAwait to avoid deadlock)
+            try
+            {
+                // Use ConfigureAwait(false) to avoid deadlock in ASP.NET synchronization context
+                var csrfToken = Task.Run(async () => await GetCsrfToken(camundaUrl).ConfigureAwait(false)).Result;
+
+                if (!string.IsNullOrEmpty(csrfToken))
+                {
+                    // Camunda uses Double Submit Cookie pattern - needs both header and cookie
+                    // Use X-XSRF-TOKEN to match what Camunda sends in response
+                    request.AddHeader("X-XSRF-TOKEN", csrfToken);
+                    Debug.WriteLine($"✓ Added CSRF token header: X-XSRF-TOKEN={csrfToken}");
+
+                    // Add cookies using RestSharp's Cookie API instead of manual header
+                    // Parse and add JSESSIONID cookie
+                    if (!string.IsNullOrEmpty(_cachedJSessionId))
+                    {
+                        var jSessionParts = _cachedJSessionId.Split('=');
+                        if (jSessionParts.Length == 2)
+                        {
+                            request.AddCookie(jSessionParts[0], jSessionParts[1]);
+                            Debug.WriteLine($"✓ Added cookie: {jSessionParts[0]}={jSessionParts[1]}");
+                        }
+                    }
+
+                    // Parse and add XSRF-TOKEN cookie
+                    if (!string.IsNullOrEmpty(_cachedCsrfCookie))
+                    {
+                        var xsrfParts = _cachedCsrfCookie.Split('=');
+                        if (xsrfParts.Length == 2)
+                        {
+                            request.AddCookie(xsrfParts[0], xsrfParts[1]);
+                            Debug.WriteLine($"✓ Added cookie: {xsrfParts[0]}={xsrfParts[1]}");
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine($"⚠ No CSRF token available - proceeding without CSRF protection");
+                }
+
+                // Debug: Log all parameters being sent
+                Debug.WriteLine($"Request parameters for {request.Resource}:");
+                foreach (var param in request.Parameters)
+                {
+                    Debug.WriteLine($"  [{param.Type}] {param.Name}: {param.Value}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"❌ Failed to add CSRF token: {ex.Message}");
+                Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+                Debug.WriteLine($"⚠ Proceeding without CSRF token due to error");
+            }
+        }
+
         public JArray GetTasksList(int? statusCode, int? territoryCode)
         {
             JArray list = null;
@@ -324,41 +476,70 @@ namespace KZ.Data
             JObject result = new JObject();
             bool status = false;
 
-            
-
-            System.Diagnostics.Debug.WriteLine($"Getting task data for task ID: {model.Id}");
             JObject taskData = GetTaskData(model.Id, true, false, null, true, true);
 
-            System.Diagnostics.Debug.WriteLine($"Task data retrieved: {(taskData != null ? "Yes" : "No")}");
+            System.Diagnostics.Debug.WriteLine("- - -");
+            System.Diagnostics.Debug.WriteLine(model.Id);
+            System.Diagnostics.Debug.WriteLine(model.ActionType);
+            System.Diagnostics.Debug.WriteLine("- - -");
             System.Diagnostics.Debug.WriteLine(taskData);
 
-            System.Diagnostics.Debug.WriteLine("Calling GetRedmineIssueId...");
-            int redmineIssueID = GetRedmineIssueId(model.Id);
-            System.Diagnostics.Debug.WriteLine($"GetRedmineIssueId returned: {redmineIssueID}");
+            if (taskData == null || !taskData.ContainsKey("attributes"))
+            {
+                result.Add("status", "FAILED");
+                result.Add("ERR", "Task data or attributes not found");
+                return result;
+            }
+
+            JObject attributes = (JObject)taskData["attributes"];
+            string globalId = attributes["GlobalID"]?.ToString();
+
+            if (string.IsNullOrEmpty(globalId))
+            {
+                result.Add("status", "FAILED");
+                result.Add("ERR", "GlobalID not found in attributes");
+                return result;
+            }
 
             try
             {
-                if (redmineIssueID > 0)
-                {
-                    // Update existing Redmine issue
-                    System.Diagnostics.Debug.WriteLine($"Updating existing Redmine issue: {redmineIssueID}");
-                    status = UpdateRedmineIssue(redmineIssueID, taskData);
-                    result.Add("action", "updated");
-                    result.Add("issue_id", redmineIssueID);
+
+                if (model.ActionType == "delegation") {
+                    System.Diagnostics.Debug.WriteLine($"No process found for GlobalID {globalId}. Starting new process.");
+                    status = StartCamundaProcess(taskData);
                 }
-                else
+                else if (model.ActionType == "update")
                 {
-                    // Create new Redmine issue
-                    System.Diagnostics.Debug.WriteLine("Creating new Redmine issue");
-                    status = CreateRedmineIssue(taskData);
-                    result.Add("action", "created");
+                    // Check if a Camunda process already exists for this GlobalID
+                    string processInstanceId = GetCamundaProcessInstanceByBusinessKey(globalId);
+                    if (!string.IsNullOrEmpty(processInstanceId))
+                    {
+                        // Process exists, trigger the sync-to-redmine worker with updated task data
+                        System.Diagnostics.Debug.WriteLine($"Process exists for GlobalID {globalId}. Triggering sync-to-redmine worker.");
+                        status = TriggerSyncToRedmineWorker(processInstanceId, taskData);
+                    }
                 }
+                else if (model.ActionType == "cancel_task")
+                {
+                    // Check if a Camunda process already exists for this GlobalID
+                    string processInstanceId = GetCamundaProcessInstanceByBusinessKey(globalId);
+                    if (!string.IsNullOrEmpty(processInstanceId))
+                    {
+
+                        taskData["attributes"]["Statusas"] = 5;
+                        // Process exists, trigger the sync-to-redmine worker with updated task data
+                        System.Diagnostics.Debug.WriteLine($"Process exists for GlobalID {globalId}. Triggering sync-to-redmine worker.");
+                        status = TriggerSyncToRedmineWorker(processInstanceId, taskData);
+                    }
+                }
+
             }
             catch (Exception e)
             {
                 result.Add("ERR", e.ToString());
                 System.Diagnostics.Debug.WriteLine($"Error in NotifyAboutChangeToTasksSystem: {e.Message}");
             }
+
             if (status)
             {
                 result.Add("status", "OK");
@@ -370,400 +551,671 @@ namespace KZ.Data
             return result;
         }
 
-        private int GetRedmineIssueId(string taskId)
-        {
-            int issueID = 0;
-            System.Diagnostics.Debug.WriteLine("GetRedmineIssueId START");
-
-            try
-            {
-                int customFieldId = 1;
-
-                System.Diagnostics.Debug.WriteLine($"GetRedmineIssueId: Searching for task {taskId} using custom field {customFieldId}");
-
-                string redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"];
-                string apiKey = WebConfigurationManager.AppSettings["RedmineApiKey"];
-                string projectId = WebConfigurationManager.AppSettings["RedmineProjectId"];
-
-                string searchUrl = $"issues.json?cf_{customFieldId}={taskId}&project_id={projectId}";
-                System.Diagnostics.Debug.WriteLine($"GetRedmineIssueId: Search URL: {searchUrl}");
-
-                RestClient client = new RestClient(redmineUrl);
-                RestRequest request = new RestRequest(searchUrl, Method.GET);
-                request.AddHeader("X-Redmine-API-Key", apiKey);
-                request.AddHeader("Content-Type", "application/json");
-
-                IRestResponse response = client.Execute(request);
-
-                if (response.StatusCode == HttpStatusCode.OK)
-                {
-                    JObject result = JObject.Parse(response.Content);
-                    if (result.ContainsKey("issues"))
-                    {
-                        JArray issues = (JArray)result["issues"];
-                        if (issues.Count > 0)
-                        {
-                            JObject issue = (JObject)issues[0];
-                            if (issue.ContainsKey("id"))
-                            {
-                                issueID = (int)issue["id"];
-                                System.Diagnostics.Debug.WriteLine($"Found existing Redmine issue: {issueID} for task: {taskId}");
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"Failed to search Redmine issues. Status: {response.StatusCode}, Content: {response.Content}");
-                }
-            }
-            catch (Exception e)
-            {
-                System.Diagnostics.Debug.WriteLine($"Exception in GetRedmineIssueId: {e.Message}");
-            }
-
-            return issueID;
-        }
-
-        private bool CreateRedmineIssue(JObject taskData)
+        private bool StartCamundaProcess(JObject taskData)
         {
             try
             {
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
-
-                string redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"];
-                string apiKey = WebConfigurationManager.AppSettings["RedmineApiKey"];
-                string projectId = WebConfigurationManager.AppSettings["RedmineProjectId"];
-
-                // Log configuration for debugging
-                System.Diagnostics.Debug.WriteLine($"Redmine URL: {redmineUrl}");
-                System.Diagnostics.Debug.WriteLine($"API Key: {apiKey?.Substring(0, 8)}...");
-                System.Diagnostics.Debug.WriteLine($"Project ID: {projectId}");
-
-                if (string.IsNullOrEmpty(redmineUrl) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(projectId))
+                if (taskData == null || !taskData.ContainsKey("attributes"))
                 {
-                    throw new Exception("Redmine configuration is incomplete. Check RedmineApiUrl, RedmineApiKey, and RedmineProjectId in Web.config");
+                    System.Diagnostics.Debug.WriteLine("StartCamundaProcess: taskData or attributes is null");
+                    return false;
                 }
 
-                RestClient client = new RestClient(redmineUrl);
-                RestRequest request = new RestRequest("issues.json", Method.POST);
-                request.AddHeader("X-Redmine-API-Key", apiKey);
-                request.AddHeader("Content-Type", "application/json");
+                JObject attributes = (JObject)taskData["attributes"];
 
-                JObject issue = new JObject();
-                JObject issueData = new JObject();
-
-                string subject = "Kauno KZ užduotis";
-                string description = "";
-                int priorityId = 2; // Normal priority by default
-                int trackerId = 1; // Default tracker
-
-                if (taskData.ContainsKey("attributes"))
+                if (attributes == null || !attributes.ContainsKey("GlobalID"))
                 {
-                    JObject fields = GetFields();
-                    JObject attributes = (JObject)taskData["attributes"];
-
-                    // Set subject from task title
-                    if (attributes.ContainsKey("Pavadinimas") && attributes["Pavadinimas"] != null)
-                    {
-                        subject = attributes["Pavadinimas"].ToString();
-                    }
-
-                    // Build description from task attributes
-                    description = "Kauno kelio ženklų sistema - užduoties informacija:\n\n";
-                    foreach (var attribute in attributes)
-                    {
-                        string fieldName = GetFieldName(attribute.Key, fields);
-                        string fieldValue = GetFieldValue(attribute.Key, attributes, fields);
-                        description += $"**{fieldName}**: {fieldValue}\n";
-                    }
-
-                    // Map priority from task importance
-                    if (attributes.ContainsKey("Svarba") && attributes["Svarba"] != null)
-                    {
-                        string priorityMapping = WebConfigurationManager.AppSettings["RedminePriorityIdMapping"];
-                        string taskPriority = attributes["Svarba"].ToString();
-                        priorityId = GetRedmineMappedValue(priorityMapping, taskPriority, 2);
-                    }
-
-                    // Map tracker from task type
-                    if (attributes.ContainsKey("Uzduoties_tipas") && attributes["Uzduoties_tipas"] != null)
-                    {
-                        string trackerMapping = WebConfigurationManager.AppSettings["RedmineTrackerIdMapping"];
-                        string taskType = attributes["Uzduoties_tipas"].ToString().ToLower();
-                        trackerId = GetRedmineMappedValue(trackerMapping, taskType, 1);
-                    }
-
-                    // Add URL to original task
-                    if (attributes.ContainsKey("URL") && attributes["URL"] != null)
-                    {
-                        description += $"\n**Nuoroda į originalų užduotį**: {attributes["URL"]}\n";
-                    }
+                    System.Diagnostics.Debug.WriteLine("StartCamundaProcess: attributes or GlobalID is null");
+                    return false;
                 }
 
-                // Add attachment links
-                if (taskData.ContainsKey("attachments"))
+                var camundaUrl = WebConfigurationManager.AppSettings["CamundaRestUrl"];
+                var client = new RestClient(camundaUrl);
+                client.Timeout = 300000; // Set timeout to 5 minutes (300 seconds)
+                var request = new RestRequest("process-definition/key/task-redmine-sync/start", Method.POST);
+
+                Debug.WriteLine($"=== Camunda Request Details ===");
+                Debug.WriteLine($"Base URL: {camundaUrl}");
+                Debug.WriteLine($"Resource: {request.Resource}");
+                Debug.WriteLine($"Full URL: {client.BuildUri(request)}");
+                Debug.WriteLine($"Method: {request.Method}");
+
+                AddCamundaAuthHeaders(request, camundaUrl);
+
+                // Build variables dynamically from all attributes
+                var variables = new Dictionary<string, object>();
+
+                // Add configuration variables required by Camunda process
+                var redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"] ?? "http://localhost:8088";
+                var redmineApiKey = WebConfigurationManager.AppSettings["RedmineApiKey"] ?? "";
+                var redmineProjectId = WebConfigurationManager.AppSettings["RedmineProjectId"] ?? "5";
+                var dotnetApiUrl = WebConfigurationManager.AppSettings["DotNetApiUrl"] ?? "http://localhost:3001";
+
+                // Use lowercase type names as per Camunda REST API specification
+                variables["redmineUrl"] = new { value = redmineUrl, type = "string" };
+                variables["redmineApiKey"] = new { value = redmineApiKey, type = "string" };
+                variables["redmineProjectId"] = new { value = redmineProjectId, type = "string" };
+                variables["dotnetApiUrl"] = new { value = dotnetApiUrl, type = "string" };
+
+                Debug.WriteLine($"Added configuration variables:");
+                Debug.WriteLine($"  redmineUrl: {redmineUrl}");
+                Debug.WriteLine($"  redmineProjectId: {redmineProjectId}");
+                Debug.WriteLine($"  dotnetApiUrl: {dotnetApiUrl}");
+
+                Debug.WriteLine($"=== Processing Attributes ===");
+                Debug.WriteLine($"Total attributes to process: {attributes.Count}");
+
+                // Add all individual attributes as separate variables
+                foreach (var attribute in attributes)
                 {
-                    JArray attachments = (JArray)taskData["attachments"];
-                    if (attachments.Count > 0)
+                    string key = attribute.Key;
+                    var value = attribute.Value;
+
+                    if (value != null && value.Type != JTokenType.Null)
                     {
-                        description += "\n**Susijusių failų nuorodos**:\n";
-                        foreach (JObject attachment in attachments)
+                        string stringValue;
+
+                        // Handle different JToken types to avoid Spin JSON parsing issues
+                        switch (value.Type)
                         {
-                            if (attachment.ContainsKey("url"))
-                            {
-                                description += $"- {attachment["url"]}\n";
-                            }
+                            case JTokenType.String:
+                            case JTokenType.Integer:
+                            case JTokenType.Float:
+                            case JTokenType.Boolean:
+                            case JTokenType.Date:
+                            case JTokenType.Guid:
+                                // Simple types - get the actual value
+                                stringValue = ((JValue)value).Value?.ToString() ?? "";
+                                variables[key] = new { value = stringValue, type = "string" };
+
+                                // Debug key variables
+                                if (key == "Pavadinimas" || key == "Aprasymas" || key == "GlobalID")
+                                {
+                                    Debug.WriteLine($"✓ Added key variable '{key}' = '{stringValue.Substring(0, Math.Min(50, stringValue.Length))}...' (type: {value.Type})");
+                                }
+                                break;
+                            case JTokenType.Object:
+                            case JTokenType.Array:
+                                // Complex types - skip them to avoid Spin parsing issues
+                                Debug.WriteLine($"⚠ Skipping complex attribute '{key}' (type: {value.Type})");
+                                break;
+                            default:
+                                // Fallback for other types
+                                stringValue = value.ToString();
+                                variables[key] = new { value = stringValue, type = "string" };
+                                break;
                         }
                     }
                 }
 
-                issueData.Add("project_id", projectId);
-                issueData.Add("subject", subject);
-                issueData.Add("description", description);
-                issueData.Add("priority_id", priorityId);
-                issueData.Add("tracker_id", trackerId);
-
-                // Add task ID as custom field
-                int customFieldId = 1; // Hardcoded for now, should match your Redmine custom field ID
-                string taskId = "";
-
-                if (taskData.ContainsKey("attributes"))
+                // Add attachments array as JSON string if present
+                if (taskData.ContainsKey("attachments") && taskData["attachments"] != null)
                 {
-                    JObject attributes = (JObject)taskData["attributes"];
-                    if (attributes.ContainsKey("GlobalID") && attributes["GlobalID"] != null && !string.IsNullOrEmpty(attributes["GlobalID"].ToString()))
+                    var attachmentsToken = taskData["attachments"];
+                    if (attachmentsToken.Type == JTokenType.Array)
                     {
-                        taskId = attributes["GlobalID"].ToString();
+                        JArray attachments = (JArray)attachmentsToken;
+                        if (attachments.Count > 0)
+                        {
+                            variables["attachments"] = new { value = attachments.ToString(Newtonsoft.Json.Formatting.None), type = "string" };
+                            variables["attachmentsCount"] = new { value = attachments.Count.ToString(), type = "string" };
+                        }
                     }
                 }
 
-                // If GlobalID is empty, we need to get it from the original task ID passed to NotifyAboutChangeToTasksSystem
-                // For now, let's check if we can extract it from the taskData or use another identifier
-                if (string.IsNullOrEmpty(taskId))
+                // Add related-features array as JSON string if present
+                if (taskData.ContainsKey("related-features") && taskData["related-features"] != null)
                 {
-                    System.Diagnostics.Debug.WriteLine("WARNING: GlobalID is empty in attributes, cannot set custom field");
-                }
-                else
-                {
-                    // Remove curly braces if present
-                    taskId = taskId.Replace("{", "").Replace("}", "");
-
-                    JArray customFields = new JArray();
-                    JObject customField = new JObject();
-                    customField.Add("id", customFieldId);
-                    customField.Add("value", taskId);
-                    customFields.Add(customField);
-                    issueData.Add("custom_fields", customFields);
-
-                    System.Diagnostics.Debug.WriteLine($"Adding custom field {customFieldId} with value: {taskId}");
+                    var relatedFeaturesToken = taskData["related-features"];
+                    if (relatedFeaturesToken.Type == JTokenType.Array)
+                    {
+                        JArray relatedFeatures = (JArray)relatedFeaturesToken;
+                        if (relatedFeatures.Count > 0)
+                        {
+                            variables["relatedFeatures"] = new { value = relatedFeatures.ToString(Newtonsoft.Json.Formatting.None), type = "string" };
+                            variables["relatedFeaturesCount"] = new { value = relatedFeatures.Count.ToString(), type = "string" };
+                        }
+                    }
                 }
 
-                issue.Add("issue", issueData);
-
-                string jsonPayload = issue.ToString();
-                System.Diagnostics.Debug.WriteLine($"JSON Payload: {jsonPayload}");
-
-                request.AddParameter("application/json", jsonPayload, ParameterType.RequestBody);
-
-                IRestResponse response = client.Execute(request);
-
-                // Log detailed response information
-                System.Diagnostics.Debug.WriteLine($"Response Status: {response.StatusCode}");
-                System.Diagnostics.Debug.WriteLine($"Response Content: {response.Content}");
-                System.Diagnostics.Debug.WriteLine($"Response Error: {response.ErrorMessage}");
-
-                if (response.StatusCode == HttpStatusCode.Created)
+                // CRITICAL: Add GlobalID as explicit variable for BPMN Task_SyncToNet
+                if (attributes.ContainsKey("GlobalID") && attributes["GlobalID"] != null)
                 {
-                    System.Diagnostics.Debug.WriteLine("Redmine issue created successfully!");
+                    string globalIdValue = attributes["GlobalID"].ToString();
+                    variables["GlobalID"] = new { value = globalIdValue, type = "string" };
+                    Debug.WriteLine($"✓ EXPLICIT GlobalID variable set: {globalIdValue}");
+                }
 
-                    // Parse response to verify custom field was saved
+                // Add custom field variables for BPMN to use
+                // Custom field 1: GlobalID (without braces for Redmine)
+                if (attributes.ContainsKey("GlobalID") && attributes["GlobalID"] != null)
+                {
+                    variables["customField_1"] = new { value = attributes["GlobalID"].ToString().Replace("{", "").Replace("}", ""), type = "string" };
+                }
+
+                // Custom field 2: uzsakovo_email
+                if (attributes.ContainsKey("uzsakovo_email") && attributes["uzsakovo_email"] != null)
+                {
+                    variables["customField_2"] = new { value = attributes["uzsakovo_email"].ToString(), type = "string" };
+                }
+
+                // Custom field 5: Adresas
+                if (attributes.ContainsKey("Adresas") && attributes["Adresas"] != null)
+                {
+                    variables["customField_5"] = new { value = attributes["Adresas"].ToString(), type = "string" };
+                }
+
+                // Custom field 6: X
+                if (attributes.ContainsKey("X") && attributes["X"] != null)
+                {
+                    variables["customField_6"] = new { value = attributes["X"].ToString(), type = "string" };
+                }
+
+                // Custom field 7: Y
+                if (attributes.ContainsKey("Y") && attributes["Y"] != null)
+                {
+                    variables["customField_7"] = new { value = attributes["Y"].ToString(), type = "string" };
+                }
+
+                // Custom field 8: URL
+                if (attributes.ContainsKey("URL") && attributes["URL"] != null)
+                {
+                    variables["customField_8"] = new { value = attributes["URL"].ToString(), type = "string" };
+                }
+
+                // Custom field 9: Uzduoties_tipas (with mapping)
+                if (attributes.ContainsKey("Uzduoties_tipas") && attributes["Uzduoties_tipas"] != null)
+                {
+                    string tipas = attributes["Uzduoties_tipas"].ToString().Trim();
+                    string mappedTipas = tipas;
+                    switch (tipas)
+                    {
+                        case "0": mappedTipas = "0 – schemų užsakymai"; break;
+                        case "1": mappedTipas = "1 – UAB \"Kauno gatvių apšvietimas\""; break;
+                        case "2": mappedTipas = "2 – UAB \"Gatas\""; break;
+                    }
+                    variables["customField_9"] = new { value = mappedTipas, type = "string" };
+                }
+
+                // Custom field 10: Teritorija (with mapping - MUST match Redmine list exactly)
+                if (attributes.ContainsKey("Teritorija") && attributes["Teritorija"] != null)
+                {
+                    string teritorija = attributes["Teritorija"].ToString().Trim();
+                    string mappedTeritorija = teritorija;
+                    switch (teritorija)
+                    {
+                        case "0": mappedTeritorija = "0 - Nenurodyta"; break;
+                        case "1": mappedTeritorija = "1 - Vilijampolė"; break;
+                        case "2": mappedTeritorija = "2 - Žaliakalnis"; break;
+                        case "3": mappedTeritorija = "3 - Šilainiai"; break;
+                        case "4": mappedTeritorija = "4 - Šančiai"; break;
+                        case "5": mappedTeritorija = "5 - Petrašiūnai"; break;
+                        case "6": mappedTeritorija = "6 - Panemunė"; break;
+                        case "7": mappedTeritorija = "7 - Gričiupis"; break;
+                        case "8": mappedTeritorija = "8 - Eiguliai"; break;
+                        case "9": mappedTeritorija = "9 - Dainava"; break;
+                        case "10": mappedTeritorija = "10 - Centras"; break;
+                        case "11": mappedTeritorija = "11 - Aleksotas"; break;
+                    }
+                    variables["customField_10"] = new { value = mappedTeritorija, type = "string" };
+                }
+
+                // Dynamic Project ID based on Imone field
+                string dynamicProjectId = redmineProjectId; // Default
+                if (attributes.ContainsKey("Imone") && attributes["Imone"] != null)
+                {
+                    string imone = attributes["Imone"].ToString().Trim();
+                    switch (imone)
+                    {
+                        case "1": dynamicProjectId = "10"; break;
+                        case "2": dynamicProjectId = "4"; break;
+                        case "3": dynamicProjectId = "11"; break;
+                    }
+                }
+                variables["redmineProjectId"] = new { value = dynamicProjectId, type = "string" };
+
+                // Priority mapping based on Svarba
+                if (attributes.ContainsKey("Svarba") && attributes["Svarba"] != null)
+                {
+                    string svarba = attributes["Svarba"].ToString().ToLower().Trim();
+                    string priorityId = "2"; // Default: medium
+                    switch (svarba)
+                    {
+                        case "low": priorityId = "1"; break;
+                        case "medium": priorityId = "2"; break;
+                        case "high": priorityId = "3"; break;
+                        case "emergency": priorityId = "5"; break;
+                    }
+                    variables["redminePriority"] = new { value = priorityId, type = "string" };
+                }
+
+                // Due date with timezone fix
+                if (attributes.ContainsKey("Pabaigos_data") && attributes["Pabaigos_data"] != null)
+                {
                     try
                     {
-                        JObject responseData = JObject.Parse(response.Content);
-                        if (responseData.ContainsKey("issue"))
+                        DateTime dueDate;
+                        if (DateTime.TryParse(attributes["Pabaigos_data"].ToString(), out dueDate))
                         {
-                            JObject createdIssue = (JObject)responseData["issue"];
-                            System.Diagnostics.Debug.WriteLine($"Created issue ID: {createdIssue["id"]}");
-
-                            if (createdIssue.ContainsKey("custom_fields"))
-                            {
-                                JArray customFieldsResponse = (JArray)createdIssue["custom_fields"];
-                                System.Diagnostics.Debug.WriteLine($"Custom fields in response: {customFieldsResponse.ToString()}");
-
-                                foreach (JObject cf in customFieldsResponse)
-                                {
-                                    if (cf["id"].ToString() == customFieldId.ToString())
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"Custom field {customFieldId} value in created issue: {cf["value"]}");
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                System.Diagnostics.Debug.WriteLine("WARNING: No custom_fields in response");
-                            }
+                            dueDate = dueDate.AddHours(12); // Timezone fix
+                            variables["redmineDueDate"] = new { value = dueDate.ToString("yyyy-MM-dd"), type = "string" };
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error parsing response: {ex.Message}");
-                    }
+                    catch { }
+                }
 
+                // Category ID (only for project 4)
+                if (dynamicProjectId == "4")
+                {
+                    variables["redmineCategoryId"] = new { value = "1", type = "string" };
+                }
+
+                // Add complete taskData as JSON for reference (as string, not json to avoid Spin parsing)
+                variables["taskDataJson"] = new { value = taskData.ToString(Newtonsoft.Json.Formatting.None), type = "string" };
+
+                var camundaPayload = new
+                {
+                    variables = variables,
+                    businessKey = attributes["GlobalID"].ToString()
+                };
+
+                Debug.WriteLine($"=== Final Payload ===");
+                Debug.WriteLine($"Total variables: {variables.Count}");
+                Debug.WriteLine($"Business key: {attributes["GlobalID"].ToString()}");
+
+                // Serialize payload to see exact structure
+                var payloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(camundaPayload, Newtonsoft.Json.Formatting.Indented);
+                Debug.WriteLine($"Payload preview (first 1000 chars):");
+                Debug.WriteLine(payloadJson.Substring(0, Math.Min(1000, payloadJson.Length)));
+
+                request.AddJsonBody(camundaPayload);
+
+                Debug.WriteLine($"=== Executing Camunda Request ===");
+                Debug.WriteLine($"Sending POST request to start process instance...");
+
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                IRestResponse response = client.Execute(request);
+                stopwatch.Stop();
+
+                Debug.WriteLine($"⏱ Request completed in {stopwatch.ElapsedMilliseconds}ms");
+                Debug.WriteLine($"Response status: {response.StatusCode} ({(int)response.StatusCode})");
+                Debug.WriteLine($"Response status description: {response.StatusDescription}");
+                Debug.WriteLine($"Response error message: {response.ErrorMessage ?? "None"}");
+                Debug.WriteLine($"Response content length: {response.Content?.Length ?? 0} characters");
+
+                if (!string.IsNullOrEmpty(response.Content))
+                {
+                    Debug.WriteLine($"Response content: {response.Content}");
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Camunda response status: {response.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"Camunda response content: {response.Content}");
+
+                if (response.IsSuccessful)
+                {
                     return true;
                 }
                 else
                 {
-                    System.Diagnostics.Debug.WriteLine($"Failed to create Redmine issue. Status: {response.StatusCode}, Content: {response.Content}");
+                    System.Diagnostics.Debug.WriteLine($"Camunda request failed: {response.StatusCode} - {response.ErrorMessage}");
                     return false;
                 }
             }
             catch (Exception e)
             {
-                System.Diagnostics.Debug.WriteLine($"Exception in CreateRedmineIssue: {e.Message}");
-                System.Diagnostics.Debug.WriteLine($"Stack trace: {e.StackTrace}");
+                System.Diagnostics.Debug.WriteLine($"Error in StartCamundaProcess: {e.Message}");
                 return false;
             }
         }
 
-        private bool UpdateRedmineIssue(int issueId, JObject taskData)
+        private string GetCamundaProcessInstanceByBusinessKey(string businessKey)
         {
             try
             {
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls | SecurityProtocolType.Tls11 | SecurityProtocolType.Tls12;
-
-                string redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"];
-                string apiKey = WebConfigurationManager.AppSettings["RedmineApiKey"];
-
-                if (string.IsNullOrEmpty(redmineUrl) || string.IsNullOrEmpty(apiKey))
-                {
-                    throw new Exception("Redmine configuration is incomplete. Check RedmineApiUrl and RedmineApiKey in Web.config");
-                }
-
-                RestClient client = new RestClient(redmineUrl);
-                RestRequest request = new RestRequest($"issues/{issueId}.json", Method.PUT);
-                request.AddHeader("X-Redmine-API-Key", apiKey);
-                request.AddHeader("Content-Type", "application/json");
-
-                JObject issue = new JObject();
-                JObject issueData = new JObject();
-
-                string subject = "Kauno KZ užduotis";
-                string description = "";
-                int priorityId = 2;
-                int trackerId = 1;
-
-                if (taskData.ContainsKey("attributes"))
-                {
-                    JObject fields = GetFields();
-                    JObject attributes = (JObject)taskData["attributes"];
-
-                    // Set subject from task title
-                    if (attributes.ContainsKey("Pavadinimas") && attributes["Pavadinimas"] != null)
-                    {
-                        subject = attributes["Pavadinimas"].ToString();
-                    }
-
-                    // Build description from task attributes
-                    description = "Kauno kelio ženklų sistema - užduoties informacija:\n\n";
-                    foreach (var attribute in attributes)
-                    {
-                        string fieldName = GetFieldName(attribute.Key, fields);
-                        string fieldValue = GetFieldValue(attribute.Key, attributes, fields);
-                        description += $"**{fieldName}**: {fieldValue}\n";
-                    }
-
-                    // Map priority from task importance
-                    if (attributes.ContainsKey("Svarba") && attributes["Svarba"] != null)
-                    {
-                        string priorityMapping = WebConfigurationManager.AppSettings["RedminePriorityIdMapping"];
-                        string taskPriority = attributes["Svarba"].ToString();
-                        priorityId = GetRedmineMappedValue(priorityMapping, taskPriority, 2);
-                    }
-
-                    // Map tracker from task type
-                    if (attributes.ContainsKey("Uzduoties_tipas") && attributes["Uzduoties_tipas"] != null)
-                    {
-                        string trackerMapping = WebConfigurationManager.AppSettings["RedmineTrackerIdMapping"];
-                        string taskType = attributes["Uzduoties_tipas"].ToString().ToLower();
-                        trackerId = GetRedmineMappedValue(trackerMapping, taskType, 1);
-                    }
-
-                    // Add URL to original task
-                    if (attributes.ContainsKey("URL") && attributes["URL"] != null)
-                    {
-                        description += $"\n**Nuoroda į originalų užduotį**: {attributes["URL"]}\n";
-                    }
-                }
-
-                // Add attachment links
-                if (taskData.ContainsKey("attachments"))
-                {
-                    JArray attachments = (JArray)taskData["attachments"];
-                    if (attachments.Count > 0)
-                    {
-                        description += "\n**Susijusių failų nuorodos**:\n";
-                        foreach (JObject attachment in attachments)
-                        {
-                            if (attachment.ContainsKey("url"))
-                            {
-                                description += $"- {attachment["url"]}\n";
-                            }
-                        }
-                    }
-                }
-
-                issueData.Add("subject", subject);
-                issueData.Add("description", description);
-                issueData.Add("priority_id", priorityId);
-                issueData.Add("tracker_id", trackerId);
-
-                issue.Add("issue", issueData);
-
-                string jsonPayload = issue.ToString();
-                System.Diagnostics.Debug.WriteLine($"Update JSON Payload: {jsonPayload}");
-
-                request.AddParameter("application/json", jsonPayload, ParameterType.RequestBody);
+                var camundaUrl = WebConfigurationManager.AppSettings["CamundaRestUrl"];
+                var client = new RestClient(camundaUrl);
+                var request = new RestRequest("process-instance", Method.GET);
+                AddCamundaAuthHeaders(request, camundaUrl);
+                request.AddParameter("businessKey", businessKey);
 
                 IRestResponse response = client.Execute(request);
 
-                System.Diagnostics.Debug.WriteLine($"Update Response Status: {response.StatusCode}");
-                System.Diagnostics.Debug.WriteLine($"Update Response Content: {response.Content}");
+                System.Diagnostics.Debug.WriteLine($"GetCamundaProcessInstanceByBusinessKey response status: {response.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"GetCamundaProcessInstanceByBusinessKey response content: {response.Content}");
 
-                if (response.StatusCode == HttpStatusCode.OK || response.StatusCode == HttpStatusCode.NoContent)
+                if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
                 {
-                    System.Diagnostics.Debug.WriteLine($"Redmine issue {issueId} updated successfully!");
+                    JArray processInstances = JArray.Parse(response.Content);
+                    if (processInstances != null && processInstances.Count > 0)
+                    {
+                        JObject firstInstance = (JObject)processInstances[0];
+                        string processInstanceId = firstInstance["id"]?.ToString();
+                        System.Diagnostics.Debug.WriteLine($"Found process instance: {processInstanceId}");
+                        return processInstanceId;
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"No process instance found for businessKey: {businessKey}");
+                return null;
+            }
+            catch (Exception e)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in GetCamundaProcessInstanceByBusinessKey: {e.Message}");
+                return null;
+            }
+        }
+
+        private bool TriggerSyncToRedmineWorker(string processInstanceId, JObject taskData)
+        {
+            try
+            {
+                if (taskData == null || !taskData.ContainsKey("attributes"))
+                {
+                    System.Diagnostics.Debug.WriteLine("TriggerSyncToRedmineWorker: taskData or attributes is null");
+                    return false;
+                }
+
+                JObject attributes = (JObject)taskData["attributes"];
+                string globalId = attributes["GlobalID"]?.ToString();
+
+                if (string.IsNullOrEmpty(globalId))
+                {
+                    System.Diagnostics.Debug.WriteLine("TriggerSyncToRedmineWorker: GlobalID not found");
+                    return false;
+                }
+
+                var camundaUrl = WebConfigurationManager.AppSettings["CamundaRestUrl"];
+                var client = new RestClient(camundaUrl);
+
+                // Step 1: Update all process variables with latest task data
+                var updateRequest = new RestRequest($"process-instance/{processInstanceId}/variables", Method.POST);
+                AddCamundaAuthHeaders(updateRequest, camundaUrl);
+
+                var modifications = new Dictionary<string, object>();
+
+                // Update all individual attributes
+                foreach (var attribute in attributes)
+                {
+                    string key = attribute.Key;
+                    var value = attribute.Value;
+
+                    if (value != null && value.Type != JTokenType.Null)
+                    {
+                        modifications[key] = new { value = value.ToString(), type = "String" };
+                    }
+                }
+
+                // Update attachments if present
+                if (taskData.ContainsKey("attachments") && taskData["attachments"] != null)
+                {
+                    var attachmentsToken = taskData["attachments"];
+                    if (attachmentsToken.Type == JTokenType.Array)
+                    {
+                        JArray attachments = (JArray)attachmentsToken;
+                        modifications["attachments"] = new { value = attachments.ToString(Newtonsoft.Json.Formatting.None), type = "Json" };
+                        modifications["attachmentsCount"] = new { value = attachments.Count.ToString(), type = "Integer" };
+                    }
+                }
+
+                // Update related-features if present
+                if (taskData.ContainsKey("related-features") && taskData["related-features"] != null)
+                {
+                    var relatedFeaturesToken = taskData["related-features"];
+                    if (relatedFeaturesToken.Type == JTokenType.Array)
+                    {
+                        JArray relatedFeatures = (JArray)relatedFeaturesToken;
+                        modifications["relatedFeatures"] = new { value = relatedFeatures.ToString(Newtonsoft.Json.Formatting.None), type = "Json" };
+                        modifications["relatedFeaturesCount"] = new { value = relatedFeatures.Count.ToString(), type = "Integer" };
+                    }
+                }
+
+                // Update complete taskData
+                modifications["taskDataJson"] = new { value = taskData.ToString(Newtonsoft.Json.Formatting.None), type = "Json" };
+
+                updateRequest.AddJsonBody(new { modifications = modifications });
+                IRestResponse updateResponse = client.Execute(updateRequest);
+
+                System.Diagnostics.Debug.WriteLine($"Update variables response status: {updateResponse.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"Update variables response content: {updateResponse.Content}");
+
+                if (!updateResponse.IsSuccessful)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to update variables: {updateResponse.StatusCode} - {updateResponse.ErrorMessage}");
+                    return false;
+                }
+
+                // Step 2: Send message to trigger the sync-to-redmine worker
+                var messageRequest = new RestRequest("message", Method.POST);
+                AddCamundaAuthHeaders(messageRequest, camundaUrl);
+
+                var messagePayload = new
+                {
+                    messageName = "TaskUpdate",
+                    businessKey = globalId,
+                    processVariables = new
+                    {
+                        updateSource = new { value = "dotnet", type = "String" }
+                    }
+                };
+
+                messageRequest.AddJsonBody(messagePayload);
+                IRestResponse messageResponse = client.Execute(messageRequest);
+
+                System.Diagnostics.Debug.WriteLine($"Send message response status: {messageResponse.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"Send message response content: {messageResponse.Content}");
+
+                if (messageResponse.IsSuccessful)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Successfully triggered sync-to-redmine worker for process: {processInstanceId}");
                     return true;
                 }
                 else
                 {
-                    System.Diagnostics.Debug.WriteLine($"Failed to update Redmine issue {issueId}. Status: {response.StatusCode}, Content: {response.Content}");
+                    System.Diagnostics.Debug.WriteLine($"Failed to send message: {messageResponse.StatusCode} - {messageResponse.ErrorMessage}");
                     return false;
                 }
             }
             catch (Exception e)
             {
-                System.Diagnostics.Debug.WriteLine($"Exception in UpdateRedmineIssue: {e.Message}");
-                System.Diagnostics.Debug.WriteLine($"Stack trace: {e.StackTrace}");
+                System.Diagnostics.Debug.WriteLine($"Error in TriggerSyncToRedmineWorker: {e.Message}");
                 return false;
             }
         }
 
-        private int GetRedmineMappedValue(string mapping, string key, int defaultValue)
+        public JObject ApproveOrRejectTask(TaskApprovalOrRejectionModel model)
         {
-            if (string.IsNullOrEmpty(mapping) || string.IsNullOrEmpty(key))
-                return defaultValue;
+            System.Diagnostics.Debug.WriteLine($"ApproveOrRejectTask called for task: {model.Id}, status: {model.Status}");
 
-            string[] mappings = mapping.Split(',');
-            foreach (string map in mappings)
+            JObject result = new JObject();
+
+            try
             {
-                string[] parts = map.Split(':');
-                if (parts.Length == 2 && parts[0].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+                // Get task data with all attributes
+                JObject taskData = GetTaskData(model.Id, true, false, null, true, true);
+
+                if (taskData == null || !taskData.ContainsKey("attributes"))
                 {
-                    if (int.TryParse(parts[1].Trim(), out int result))
+                    result.Add("status", "FAILED");
+                    result.Add("error", "Task data or attributes not found");
+                    System.Diagnostics.Debug.WriteLine("ApproveOrRejectTask: Task data not found");
+                    return result;
+                }
+
+                JObject attributes = (JObject)taskData["attributes"];
+                string globalId = attributes["GlobalID"]?.ToString();
+
+                if (string.IsNullOrEmpty(globalId))
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", "GlobalID not found in attributes");
+                    return result;
+                }
+
+                // Find the Camunda process instance for this task
+                string processInstanceId = GetCamundaProcessInstanceByBusinessKey(globalId);
+
+                if (string.IsNullOrEmpty(processInstanceId))
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", "No Camunda process found for this task");
+                    System.Diagnostics.Debug.WriteLine($"ApproveOrRejectTask: No process found for GlobalID {globalId}");
+                    return result;
+                }
+
+                // Update task status based on approval/rejection
+                // Approved -> Status 3 (Closed) in Redmine
+                // Rejected -> Status 6 (Rejected) in Redmine
+                int redmineStatusId;
+                string statusName;
+
+                if (model.Status == "approved")
+                {
+                    statusName = "approved";
+                    // Update Patvirtinimas (approval) field to 1 in ArcGIS Feature Service
+                    RestClient arcgisClient = GetRestClient();
+                    RestRequest arcgisRequest = Utilities.GetRestRequest(arcgisClient, "applyEdits", null, true);
+
+                    JArray updatesArray = new JArray();
+                    JObject featureUpdate = new JObject();
+                    JObject updateAttributes = new JObject();
+                    updateAttributes["GlobalID"] = globalId;
+                    updateAttributes["Patvirtinimas"] = 1;
+                    updateAttributes["Statusas"] = 4;
+                    featureUpdate["attributes"] = updateAttributes;
+                    updatesArray.Add(featureUpdate);
+
+                    arcgisRequest.AddParameter("updates", updatesArray.ToString(Newtonsoft.Json.Formatting.None));
+                    arcgisRequest.AddParameter("useGlobalIds", "true"); // Critical: tells ArcGIS to use GlobalID instead of OBJECTID
+                    IRestResponse arcgisResponse = arcgisClient.Post(arcgisRequest);
+
+                    System.Diagnostics.Debug.WriteLine($"Update Patvirtinimas response status: {arcgisResponse.StatusCode}");
+                    System.Diagnostics.Debug.WriteLine($"Update Patvirtinimas response content: {arcgisResponse.Content}");
+
+                    if (!arcgisResponse.IsSuccessful)
+                    {
+                        result.Add("status", "FAILED");
+                        result.Add("error", $"Failed to update Patvirtinimas field: {arcgisResponse.StatusCode}");
+                        System.Diagnostics.Debug.WriteLine($"Failed to update Patvirtinimas: {arcgisResponse.ErrorMessage}");
                         return result;
+                    }
+
+                    // Verify the update was successful
+                    try
+                    {
+                        JObject arcgisResponseObj = JObject.Parse(arcgisResponse.Content);
+                        if (arcgisResponseObj.ContainsKey("updateResults"))
+                        {
+                            JArray updateResults = (JArray)arcgisResponseObj["updateResults"];
+                            if (updateResults.Count > 0)
+                            {
+                                JObject updateResult = (JObject)updateResults[0];
+                                if (!updateResult.ContainsKey("success") || !(bool)updateResult["success"])
+                                {
+                                    result.Add("status", "FAILED");
+                                    string errorMsg = updateResult["error"]?.ToString() ?? "Unknown error updating Patvirtinimas";
+                                    result.Add("error", errorMsg);
+                                    System.Diagnostics.Debug.WriteLine($"Failed to update Patvirtinimas: {errorMsg}");
+                                    return result;
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception parseEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Error parsing applyEdits response: {parseEx.Message}");
+                    }
+                }
+                else if (model.Status == "reject")
+                {
+                    statusName = "rejected";
+                }
+                else
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", "Invalid status. Must be 'approved' or 'reject'");
+                    return result;
+                }
+
+                var camundaUrl = WebConfigurationManager.AppSettings["CamundaRestUrl"];
+                var client = new RestClient(camundaUrl);
+
+                //System.Diagnostics.Debug.WriteLine($"Setting task status to: {statusName} (Redmine ID: {redmineStatusId})");
+
+                //// Trigger sync to Redmine via Camunda
+
+
+                //// Step 1: Update process variables with new status
+                //var updateRequest = new RestRequest($"process-instance/{processInstanceId}/variables", Method.POST);
+
+                //var modifications = new Dictionary<string, object>
+                //{
+                //    ["statusId"] = new { value = redmineStatusId.ToString(), type = "String" },
+                //    ["approvalStatus"] = new { value = model.Status, type = "String" },
+                //    ["updateSource"] = new { value = "approval", type = "String" }
+                //};
+
+                //// Add rejection reason if provided
+                //if (!string.IsNullOrEmpty(model.Reason))
+                //{
+                //    modifications["rejectionReason"] = new { value = model.Reason, type = "String" };
+                //}
+
+                //updateRequest.AddJsonBody(new { modifications = modifications });
+                //IRestResponse updateResponse = client.Execute(updateRequest);
+
+                //System.Diagnostics.Debug.WriteLine($"Update variables response status: {updateResponse.StatusCode}");
+                //System.Diagnostics.Debug.WriteLine($"Update variables response content: {updateResponse.Content}");
+
+                //if (!updateResponse.IsSuccessful)
+                //{
+                //    result.Add("status", "FAILED");
+                //    result.Add("error", $"Failed to update Camunda variables: {updateResponse.StatusCode}");
+                //    System.Diagnostics.Debug.WriteLine($"Failed to update variables: {updateResponse.ErrorMessage}");
+                //    return result;
+                //}
+
+                // Step 2: Send message to trigger the sync-to-redmine worker
+                var messageRequest = new RestRequest("message", Method.POST);
+                AddCamundaAuthHeaders(messageRequest, camundaUrl);
+
+                var messagePayload = new
+                {
+                    messageName = "ValidationUpdate",
+                    businessKey = globalId,
+                    processVariables = new{
+                        validationResult = new { value = statusName, type = "String" },
+                    }
+                };
+
+                messageRequest.AddJsonBody(messagePayload);
+                IRestResponse messageResponse = client.Execute(messageRequest);
+
+                System.Diagnostics.Debug.WriteLine($"Send message response status: {messageResponse.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"Send message response content: {messageResponse.Content}");
+
+                if (messageResponse.IsSuccessful)
+                {
+                    result.Add("status", "Ok");
+                    result.Add("message", $"Task {model.Status} successfully and synced to Redmine");
+                    System.Diagnostics.Debug.WriteLine($"Successfully triggered sync-to-redmine for {model.Status} action");
+                }
+                else
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", $"Failed to send message to Camunda: {messageResponse.StatusCode}");
+                    System.Diagnostics.Debug.WriteLine($"Failed to send message: {messageResponse.ErrorMessage}");
                 }
             }
-            return defaultValue;
+            catch (Exception e)
+            {
+                result.Add("status", "FAILED");
+                result.Add("error", e.Message);
+                result.Add("stackTrace", e.StackTrace);
+                System.Diagnostics.Debug.WriteLine($"Error in ApproveOrRejectTask: {e.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack trace: {e.StackTrace}");
+            }
+
+            return result;
         }
 
         public List<Dictionary<string, object>> GetTasksListForUser()
@@ -1037,6 +1489,184 @@ namespace KZ.Data
             request.AddHeader("authorization", "Bearer " + token);
             IRestResponse response = client.Get(request);
             return response;
+        }
+
+        public JObject UpdateTaskFromCamunda(JObject updateData)
+        {
+            JObject result = new JObject();
+
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"UpdateTaskFromCamunda called with data: {updateData}");
+
+                if (updateData == null || !updateData.ContainsKey("globalId"))
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", "globalId is required");
+                    System.Diagnostics.Debug.WriteLine("UpdateTaskFromCamunda: globalId is missing");
+                    return result;
+                }
+
+                string globalId = updateData["globalId"]?.ToString();
+
+                if (string.IsNullOrEmpty(globalId))
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", "globalId cannot be empty");
+                    return result;
+                }
+
+                // Build the update payload for ArcGIS Feature Service
+                RestClient client = GetRestClient();
+                RestRequest request = Utilities.GetRestRequest(client, "applyEdits", null, true);
+
+                JArray updatesArray = new JArray();
+                JObject featureUpdate = new JObject
+                {
+                    ["attributes"] = new JObject()
+                };
+
+                // Add GlobalID to identify the feature to update
+                featureUpdate["attributes"]["GlobalID"] = globalId;
+
+                int fieldsUpdated = 0;
+
+                // Map Camunda/Redmine fields to ArcGIS attributes with null handling
+
+                // Handle description field
+                if (updateData.ContainsKey("description") && updateData["description"] != null)
+                {
+                    string description = updateData["description"].ToString();
+                    if (!string.IsNullOrEmpty(description))
+                    {
+                        featureUpdate["attributes"]["Aprasymas"] = description;
+                        fieldsUpdated++;
+                        System.Diagnostics.Debug.WriteLine($"Mapping Aprasymas: {description.Substring(0, Math.Min(50, description.Length))}...");
+                    }
+                }
+
+                // Handle status field (string from Redmine webhook)
+                if (updateData.ContainsKey("status") && updateData["status"] != null)
+                {
+                    int status = Convert.ToInt32(updateData["status"]);
+                    int arcgisStatus;
+
+                    switch (status)
+                    {
+                        case 1:
+                            arcgisStatus = 6;
+                            break;
+                        // Add more cases as needed
+                        default:
+                            arcgisStatus = 6; // Default: New
+                            break;
+                    }
+                    // Map Redmine status names to ArcGIS Statusas codes
+
+                    featureUpdate["attributes"]["Statusas"] = arcgisStatus;
+                    fieldsUpdated++;
+                    System.Diagnostics.Debug.WriteLine($"Mapping Statusas: {status} -> {arcgisStatus}");
+                    
+                }
+
+                // Handle progress field (done_ratio from Redmine)
+                if (updateData.ContainsKey("progress") && updateData["progress"] != null)
+                {
+                    string progress = updateData["progress"].ToString();
+                    if (!string.IsNullOrEmpty(progress))
+                    {
+                        int progressValue;
+                        if (int.TryParse(progress, out progressValue))
+                        {
+                            // Store progress if you have a field for it
+                            // featureUpdate["attributes"]["Progress"] = progressValue;
+                            fieldsUpdated++;
+                            System.Diagnostics.Debug.WriteLine($"Mapping Progress: {progressValue}%");
+                        }
+                    }
+                }
+
+                // Handle updatedFrom field
+                if (updateData.ContainsKey("updatedFrom") && updateData["updatedFrom"] != null)
+                {
+                    string updatedFrom = updateData["updatedFrom"].ToString();
+                    System.Diagnostics.Debug.WriteLine($"Update source: {updatedFrom}");
+                }
+
+                if (fieldsUpdated == 0)
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", "No valid fields to update");
+                    System.Diagnostics.Debug.WriteLine("UpdateTaskFromCamunda: No fields to update");
+                    return result;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Updating {fieldsUpdated} fields for task {globalId}");
+
+                updatesArray.Add(featureUpdate);
+                request.AddParameter("updates", updatesArray.ToString(Newtonsoft.Json.Formatting.None));
+
+                IRestResponse response = client.Post(request);
+
+                System.Diagnostics.Debug.WriteLine($"ArcGIS applyEdits response status: {response.StatusCode}");
+                System.Diagnostics.Debug.WriteLine($"ArcGIS applyEdits response content: {response.Content}");
+
+                if (response.IsSuccessful)
+                {
+                    JObject responseObj = JObject.Parse(response.Content);
+
+                    if (responseObj.ContainsKey("updateResults"))
+                    {
+                        JArray updateResults = (JArray)responseObj["updateResults"];
+                        if (updateResults.Count > 0)
+                        {
+                            JObject updateResult = (JObject)updateResults[0];
+                            if (updateResult.ContainsKey("success") && (bool)updateResult["success"])
+                            {
+                                result.Add("status", "OK");
+                                result.Add("message", $"Task updated successfully ({fieldsUpdated} fields)");
+                                result.Add("globalId", globalId);
+                                result.Add("fieldsUpdated", fieldsUpdated);
+                                System.Diagnostics.Debug.WriteLine($"Task {globalId} updated successfully with {fieldsUpdated} fields");
+                            }
+                            else
+                            {
+                                result.Add("status", "FAILED");
+                                string errorMsg = updateResult["error"]?.ToString() ?? "Unknown error";
+                                result.Add("error", errorMsg);
+                                System.Diagnostics.Debug.WriteLine($"Failed to update task {globalId}: {errorMsg}");
+                            }
+                        }
+                        else
+                        {
+                            result.Add("status", "FAILED");
+                            result.Add("error", "Empty update results");
+                        }
+                    }
+                    else
+                    {
+                        result.Add("status", "FAILED");
+                        result.Add("error", "No update results in response");
+                    }
+                }
+                else
+                {
+                    result.Add("status", "FAILED");
+                    result.Add("error", $"HTTP {response.StatusCode}: {response.ErrorMessage}");
+                    result.Add("responseContent", response.Content);
+                    System.Diagnostics.Debug.WriteLine($"ArcGIS request failed: {response.StatusCode} - {response.ErrorMessage}");
+                }
+            }
+            catch (Exception e)
+            {
+                result.Add("status", "FAILED");
+                result.Add("error", e.Message);
+                result.Add("stackTrace", e.StackTrace);
+                System.Diagnostics.Debug.WriteLine($"Error in UpdateTaskFromCamunda: {e.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack trace: {e.StackTrace}");
+            }
+
+            return result;
         }
     }
 }

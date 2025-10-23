@@ -223,7 +223,7 @@
 			return promise;
 		},
 
-		notifyAboutTaskChangeToEinpix: function(featureProperties){
+		notifyAboutTaskChangeToEinpix: function(featureProperties, actionType){
 			var doNotify;
 			if (featureProperties) {
 				var globalId = featureProperties["GlobalID"];
@@ -244,7 +244,8 @@
 					var params = {
 						enterpriseId: featureProperties["Imone"],
 						id: globalId,
-						attachment: true
+						attachment: true,
+						actionType: actionType || "update"
 					};
 					CommonHelper.getFetchPromise(CommonHelper.webServicesRoot + "tasks/notify-about-change-to-tasks-system", function(json){
 						return json;
