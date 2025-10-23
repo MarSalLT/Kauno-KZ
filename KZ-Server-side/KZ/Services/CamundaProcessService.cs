@@ -20,9 +20,14 @@ namespace KZ.Services
         private static string _cachedJSessionId = null;
         private static DateTime _tokenExpiry = DateTime.MinValue;
 
+        private string NormalizeGlobalId(string globalId)
+        {
+            if (string.IsNullOrEmpty(globalId)) return globalId;
+            return globalId.Replace("{", "").Replace("}", "").ToUpper();
+        }
+
         private async Task<string> GetCsrfToken(string camundaUrl)
         {
-            // Return cached token if still valid (cache for 5 minutes)
             if (_cachedCsrfToken != null && DateTime.UtcNow < _tokenExpiry)
             {
                 return _cachedCsrfToken;
@@ -30,12 +35,9 @@ namespace KZ.Services
 
             try
             {
-                // Fetch CSRF token by making a GET request to Camunda /version endpoint
-                // Note: Even if endpoint returns 404, Camunda includes X-CSRF-Token in headers
                 var versionUrl = camundaUrl.TrimEnd('/') + "/version";
                 var request = new HttpRequestMessage(HttpMethod.Get, versionUrl);
 
-                // Check if basic auth credentials are configured
                 var camundaUsername = ConfigurationManager.AppSettings["CamundaUsername"];
                 var camundaPassword = ConfigurationManager.AppSettings["CamundaPassword"];
 
@@ -46,17 +48,13 @@ namespace KZ.Services
                     request.Headers.Authorization = new AuthenticationHeaderValue("Basic", authHeader);
                 }
 
-                var response = await _httpClient.SendAsync(request);
-                // Don't throw on non-success - we just need the CSRF token from headers
+                var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
 
-                // Extract CSRF token from response headers (works even on 404)
-                // Camunda returns the token as X-XSRF-TOKEN header
                 if (response.Headers.Contains("X-XSRF-TOKEN"))
                 {
                     _cachedCsrfToken = response.Headers.GetValues("X-XSRF-TOKEN").FirstOrDefault();
                     _tokenExpiry = DateTime.UtcNow.AddMinutes(5);
 
-                    // Also extract cookies (Double Submit Cookie pattern + session)
                     if (response.Headers.Contains("Set-Cookie"))
                     {
                         var cookies = response.Headers.GetValues("Set-Cookie");
@@ -64,26 +62,20 @@ namespace KZ.Services
                         {
                             if (cookie.Contains("XSRF-TOKEN="))
                             {
-                                // Extract just the cookie value part (XSRF-TOKEN=value)
                                 var cookieValue = cookie.Split(';')[0];
                                 _cachedCsrfCookie = cookieValue;
-                                Debug.WriteLine($"✓ Fetched CSRF cookie: {_cachedCsrfCookie}");
                             }
                             else if (cookie.Contains("JSESSIONID="))
                             {
-                                // Also extract JSESSIONID for session management
                                 var cookieValue = cookie.Split(';')[0];
                                 _cachedJSessionId = cookieValue;
-                                Debug.WriteLine($"✓ Fetched JSESSIONID: {_cachedJSessionId}");
                             }
                         }
                     }
 
-                    Debug.WriteLine($"✓ Fetched CSRF token: {_cachedCsrfToken} (Status: {response.StatusCode})");
                     return _cachedCsrfToken;
                 }
 
-                Debug.WriteLine($"Warning: No CSRF token found in X-XSRF-TOKEN header (Status: {response.StatusCode})");
                 return null;
             }
             catch (Exception ex)
@@ -97,7 +89,6 @@ namespace KZ.Services
         {
             var request = new HttpRequestMessage(method, url);
 
-            // Add basic auth if configured
             var camundaUsername = ConfigurationManager.AppSettings["CamundaUsername"];
             var camundaPassword = ConfigurationManager.AppSettings["CamundaPassword"];
 
@@ -108,15 +99,11 @@ namespace KZ.Services
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic", authHeader);
             }
 
-            // Add CSRF token
-            var csrfToken = await GetCsrfToken(camundaUrl);
+            var csrfToken = await GetCsrfToken(camundaUrl).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(csrfToken))
             {
-                // Camunda uses Double Submit Cookie pattern - needs both header and cookie
-                // Use X-XSRF-TOKEN to match what Camunda sends in response
                 request.Headers.Add("X-XSRF-TOKEN", csrfToken);
 
-                // Add cookies (both JSESSIONID and XSRF-TOKEN)
                 var cookieParts = new List<string>();
                 if (!string.IsNullOrEmpty(_cachedJSessionId))
                 {
@@ -139,41 +126,25 @@ namespace KZ.Services
 
         public async Task<string> StartTaskSyncProcess(string globalId, string title, string description, int? statusId = null)
         {
-            var camundaUrl = ConfigurationManager.AppSettings["CamundaRestUrl"]
-                ?? Environment.GetEnvironmentVariable("CAMUNDA__URL")
-                ?? "http://localhost:8080/engine-rest";
+            var camundaUrl = ConfigurationManager.AppSettings["CamundaRestUrl"] ?? "http://localhost:8080/engine-rest";
+            var redmineUrl = ConfigurationManager.AppSettings["RedmineApiUrl"] ?? "http://localhost:8088";
+            var redmineApiKey = ConfigurationManager.AppSettings["RedmineApiKey"] ?? "";
+            var redmineProjectId = ConfigurationManager.AppSettings["RedmineProjectId"] ?? "5";
+            var dotnetApiUrl = ConfigurationManager.AppSettings["DotNetApiUrl"] ?? "http://localhost:3001";
 
-            var redmineUrl = ConfigurationManager.AppSettings["RedmineApiUrl"]
-                ?? Environment.GetEnvironmentVariable("REDMINE__URL")
-                ?? "http://localhost:8088";
-
-            var redmineApiKey = ConfigurationManager.AppSettings["RedmineApiKey"]
-                ?? Environment.GetEnvironmentVariable("REDMINE__APIKEY")
-                ?? "0efee588d931db2267d22124525730c2acdc3218";
-
-            var redmineProjectId = ConfigurationManager.AppSettings["RedmineProjectId"]
-                ?? Environment.GetEnvironmentVariable("REDMINE__PROJECTID")
-                ?? "5";
-
-            var dotnetApiUrl = ConfigurationManager.AppSettings["DotNetApiUrl"]
-                ?? Environment.GetEnvironmentVariable("DOTNET__APIURL")
-                ?? "http://localhost:3001";
+            var normalizedGlobalId = NormalizeGlobalId(globalId);
 
             var variables = new Dictionary<string, object>
             {
-                // Task data
-                ["GlobalID"] = new { value = globalId, type = "String" },
+                ["GlobalID"] = new { value = normalizedGlobalId, type = "String" },
                 ["Pavadinimas"] = new { value = title, type = "String" },
                 ["Aprasymas"] = new { value = description, type = "String" },
-
-                // Configuration
                 ["redmineUrl"] = new { value = redmineUrl, type = "String" },
                 ["redmineApiKey"] = new { value = redmineApiKey, type = "String" },
                 ["redmineProjectId"] = new { value = redmineProjectId, type = "String" },
                 ["dotnetApiUrl"] = new { value = dotnetApiUrl, type = "String" }
             };
 
-            // Optionally include status
             if (statusId.HasValue)
             {
                 variables["Statusas"] = new { value = statusId.Value, type = "Integer" };
@@ -181,7 +152,7 @@ namespace KZ.Services
 
             var payload = new
             {
-                businessKey = globalId,
+                businessKey = normalizedGlobalId,
                 variables
             };
 
@@ -200,30 +171,128 @@ namespace KZ.Services
                 var result = JObject.Parse(resultJson);
                 var processInstanceId = result["id"].ToString();
 
-                Debug.WriteLine($"Started process instance {processInstanceId} for globalId {globalId}");
+                Debug.WriteLine($"Started process {processInstanceId} for {normalizedGlobalId}");
 
                 return processInstanceId;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to start Camunda process for globalId {globalId}: {ex.Message}");
+                Debug.WriteLine($"Failed to start process: {ex.Message}");
                 throw;
             }
         }
 
-        public async Task SendTaskUpdateMessage(string globalId, string updateSource, object updateData)
+        public async Task SendTaskUpdateMessage(string globalId, string updateSource, JObject taskData)
         {
             var camundaUrl = ConfigurationManager.AppSettings["CamundaRestUrl"] ?? "http://localhost:8080/engine-rest";
+            var normalizedGlobalId = NormalizeGlobalId(globalId);
+
+            JObject attributes = taskData["attributes"] as JObject;
+            if (attributes == null)
+            {
+                throw new ArgumentException("taskData must contain 'attributes' object");
+            }
+
+            var pavadinimas = attributes["Pavadinimas"]?.ToString() ?? "";
+            var aprasymas = attributes["Aprasymas"]?.ToString() ?? "";
+            var statusas = attributes["Statusas"]?.ToString() ?? "";
+
+            var updateDataObj = new JObject
+            {
+                ["subject"] = pavadinimas,
+                ["description"] = aprasymas,
+                ["statusId"] = statusas,
+                ["attributes"] = attributes
+            };
+
+            if (taskData.ContainsKey("attachments"))
+            {
+                updateDataObj["attachments"] = taskData["attachments"];
+            }
+
+            if (taskData.ContainsKey("related-features"))
+            {
+                updateDataObj["related-features"] = taskData["related-features"];
+            }
+
+            var processVariables = new Dictionary<string, object>
+            {
+                ["GlobalID"] = new { value = normalizedGlobalId, type = "String" },
+                ["updateSource"] = new { value = updateSource, type = "String" },
+                ["updateData"] = new { value = updateDataObj.ToString(Formatting.None), type = "String" },
+                ["Pavadinimas"] = new { value = pavadinimas, type = "String" },
+                ["Aprasymas"] = new { value = aprasymas, type = "String" },
+                ["Statusas"] = new { value = statusas, type = "String" }
+            };
+
+            // Add Svarba (Priority) mapping to redminePriority
+            if (attributes.ContainsKey("Svarba") && attributes["Svarba"] != null)
+            {
+                string svarba = attributes["Svarba"].ToString().ToLower().Trim();
+                string priorityId = "2";
+                switch (svarba)
+                {
+                    case "low": priorityId = "1"; break;
+                    case "medium": priorityId = "2"; break;
+                    case "high": priorityId = "3"; break;
+                    case "emergency": priorityId = "5"; break;
+                }
+                processVariables["redminePriority"] = new { value = priorityId, type = "String" };
+            }
+
+            // Add Teritorija mapping to customField_10
+            if (attributes.ContainsKey("Teritorija") && attributes["Teritorija"] != null)
+            {
+                string teritorija = attributes["Teritorija"].ToString().Trim();
+                string mappedTeritorija = teritorija;
+                switch (teritorija)
+                {
+                    case "0": mappedTeritorija = "0 - Nenurodyta"; break;
+                    case "1": mappedTeritorija = "1 - Vilijampolė"; break;
+                    case "2": mappedTeritorija = "2 - Žaliakalnis"; break;
+                    case "3": mappedTeritorija = "3 - Šilainiai"; break;
+                    case "4": mappedTeritorija = "4 - Šančiai"; break;
+                    case "5": mappedTeritorija = "5 - Petrašiūnai"; break;
+                    case "6": mappedTeritorija = "6 - Panemunė"; break;
+                    case "7": mappedTeritorija = "7 - Gričiupis"; break;
+                    case "8": mappedTeritorija = "8 - Eiguliai"; break;
+                    case "9": mappedTeritorija = "9 - Dainava"; break;
+                    case "10": mappedTeritorija = "10 - Centras"; break;
+                    case "11": mappedTeritorija = "11 - Aleksotas"; break;
+                }
+                processVariables["customField_10"] = new { value = mappedTeritorija, type = "String" };
+            }
+
+            // Add Pabaigos_data (Due Date) mapping to redmineDueDate
+            if (attributes.ContainsKey("Pabaigos_data") && attributes["Pabaigos_data"] != null)
+            {
+                try
+                {
+                    DateTime dueDate;
+                    if (DateTime.TryParse(attributes["Pabaigos_data"].ToString(), out dueDate))
+                    {
+                        dueDate = dueDate.AddHours(12);
+                        processVariables["redmineDueDate"] = new { value = dueDate.ToString("yyyy-MM-dd"), type = "String" };
+                    }
+                }
+                catch { }
+            }
+
+            // Add Category based on Imone (company)
+            if (attributes.ContainsKey("Imone") && attributes["Imone"] != null)
+            {
+                string imone = attributes["Imone"].ToString().Trim();
+                if (imone == "2") // Gatas
+                {
+                    processVariables["redmineCategoryId"] = new { value = "1", type = "String" };
+                }
+            }
 
             var message = new
             {
                 messageName = "TaskUpdate",
-                businessKey = globalId,
-                processVariables = new Dictionary<string, object>
-                {
-                    ["updateSource"] = new { value = updateSource, type = "String" },
-                    ["updateData"] = new { value = JsonConvert.SerializeObject(updateData), type = "Json" }
-                }
+                businessKey = normalizedGlobalId,
+                processVariables = processVariables
             };
 
             try
@@ -231,17 +300,41 @@ namespace KZ.Services
                 var json = JsonConvert.SerializeObject(message);
                 var url = $"{camundaUrl}/message";
 
-                var request = await CreateAuthenticatedRequest(HttpMethod.Post, url, camundaUrl);
+                Debug.WriteLine("==================== SEND TASK UPDATE ====================");
+                Debug.WriteLine($"URL: {url}");
+                Debug.WriteLine($"Business Key: {normalizedGlobalId}");
+                Debug.WriteLine($"Update Source: {updateSource}");
+                Debug.WriteLine($"Payload:");
+                Debug.WriteLine(json);
+                Debug.WriteLine("==========================================================");
+
+                var request = await CreateAuthenticatedRequest(HttpMethod.Post, url, camundaUrl).ConfigureAwait(false);
                 request.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.SendAsync(request);
-                response.EnsureSuccessStatusCode();
+                Debug.WriteLine($"Sending HTTP request to Camunda...");
+                var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
+                var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-                Debug.WriteLine($"Sent TaskUpdate message for globalId {globalId} (source: {updateSource})");
+                Debug.WriteLine($"Response Status: {(int)response.StatusCode} {response.StatusCode}");
+                Debug.WriteLine($"Response Body: {responseContent}");
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Debug.WriteLine($"❌ FAILED: {response.StatusCode} - {responseContent}");
+                    throw new HttpRequestException($"Camunda returned {response.StatusCode}: {responseContent}");
+                }
+
+                Debug.WriteLine($"✅ TaskUpdate sent successfully for {normalizedGlobalId}");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to send TaskUpdate message for globalId {globalId}: {ex.Message}");
+                Debug.WriteLine($"❌ EXCEPTION in SendTaskUpdateMessage:");
+                Debug.WriteLine($"   Message: {ex.Message}");
+                Debug.WriteLine($"   Stack: {ex.StackTrace}");
+                if (ex.InnerException != null)
+                {
+                    Debug.WriteLine($"   Inner: {ex.InnerException.Message}");
+                }
                 throw;
             }
         }
@@ -249,6 +342,7 @@ namespace KZ.Services
         public async Task SendValidationMessage(string globalId, string validationResult, string rejectionReason = null)
         {
             var camundaUrl = ConfigurationManager.AppSettings["CamundaRestUrl"] ?? "http://localhost:8080/engine-rest";
+            var normalizedGlobalId = NormalizeGlobalId(globalId);
 
             var variables = new Dictionary<string, object>
             {
@@ -263,7 +357,7 @@ namespace KZ.Services
             var message = new
             {
                 messageName = "ValidationUpdate",
-                businessKey = globalId,
+                businessKey = normalizedGlobalId,
                 processVariables = variables
             };
 
@@ -278,12 +372,40 @@ namespace KZ.Services
                 var response = await _httpClient.SendAsync(request);
                 response.EnsureSuccessStatusCode();
 
-                Debug.WriteLine($"Sent ValidationUpdate message for globalId {globalId} (result: {validationResult})");
+                Debug.WriteLine($"Sent ValidationUpdate for {normalizedGlobalId}: {validationResult}");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to send ValidationUpdate message for globalId {globalId}: {ex.Message}");
+                Debug.WriteLine($"Failed to send ValidationUpdate: {ex.Message}");
                 throw;
+            }
+        }
+
+        public async Task<bool> ProcessInstanceExists(string globalId)
+        {
+            var camundaUrl = ConfigurationManager.AppSettings["CamundaRestUrl"] ?? "http://localhost:8080/engine-rest";
+            var normalizedGlobalId = NormalizeGlobalId(globalId);
+
+            try
+            {
+                var url = $"{camundaUrl}/process-instance?businessKey={Uri.EscapeDataString(normalizedGlobalId)}";
+                var request = await CreateAuthenticatedRequest(HttpMethod.Get, url, camundaUrl);
+
+                var response = await _httpClient.SendAsync(request);
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var instances = JArray.Parse(responseContent);
+                    return instances.Count > 0;
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error checking process instance: {ex.Message}");
+                return false;
             }
         }
     }

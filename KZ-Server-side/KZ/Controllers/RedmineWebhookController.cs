@@ -21,15 +21,24 @@ namespace KZ.Controllers
     {
         private static readonly HttpClient _httpClient = new HttpClient();
         private const int REDMINE_GLOBAL_ID_FIELD = 11;
-        private static readonly int[] COMPLETED_STATUS_IDS = { 3, 5 }; // Resolved, Closed
+        private static readonly int[] COMPLETED_STATUS_IDS = { 3, 5 };
         private static string _cachedCsrfToken = null;
         private static string _cachedCsrfCookie = null;
         private static string _cachedJSessionId = null;
         private static DateTime _tokenExpiry = DateTime.MinValue;
 
+        // Store last 10 webhook calls for debugging
+        private static readonly System.Collections.Concurrent.ConcurrentQueue<object> _webhookLog = new System.Collections.Concurrent.ConcurrentQueue<object>();
+        private const int MAX_LOG_ENTRIES = 10;
+
+        private string NormalizeGlobalId(string globalId)
+        {
+            if (string.IsNullOrEmpty(globalId)) return globalId;
+            return globalId.Replace("{", "").Replace("}", "").ToUpper();
+        }
+
         private async Task<string> GetCsrfToken(string camundaUrl)
         {
-            // Return cached token if still valid (cache for 5 minutes)
             if (_cachedCsrfToken != null && DateTime.UtcNow < _tokenExpiry)
             {
                 return _cachedCsrfToken;
@@ -37,12 +46,9 @@ namespace KZ.Controllers
 
             try
             {
-                // Fetch CSRF token by making a GET request to Camunda /version endpoint
-                // Note: Even if endpoint returns 404, Camunda includes X-CSRF-Token in headers
                 var versionUrl = camundaUrl.TrimEnd('/') + "/version";
                 var request = new HttpRequestMessage(HttpMethod.Get, versionUrl);
 
-                // Check if basic auth credentials are configured
                 var camundaUsername = ConfigurationManager.AppSettings["CamundaUsername"];
                 var camundaPassword = ConfigurationManager.AppSettings["CamundaPassword"];
 
@@ -54,16 +60,12 @@ namespace KZ.Controllers
                 }
 
                 var response = await _httpClient.SendAsync(request);
-                // Don't throw on non-success - we just need the CSRF token from headers
 
-                // Extract CSRF token from response headers (works even on 404)
-                // Camunda returns the token as X-XSRF-TOKEN header
                 if (response.Headers.Contains("X-XSRF-TOKEN"))
                 {
                     _cachedCsrfToken = response.Headers.GetValues("X-XSRF-TOKEN").FirstOrDefault();
                     _tokenExpiry = DateTime.UtcNow.AddMinutes(5);
 
-                    // Also extract cookies (Double Submit Cookie pattern + session)
                     if (response.Headers.Contains("Set-Cookie"))
                     {
                         var cookies = response.Headers.GetValues("Set-Cookie");
@@ -71,26 +73,18 @@ namespace KZ.Controllers
                         {
                             if (cookie.Contains("XSRF-TOKEN="))
                             {
-                                // Extract just the cookie value part (XSRF-TOKEN=value)
-                                var cookieValue = cookie.Split(';')[0];
-                                _cachedCsrfCookie = cookieValue;
-                                Debug.WriteLine($"✓ Fetched CSRF cookie: {_cachedCsrfCookie}");
+                                _cachedCsrfCookie = cookie.Split(';')[0];
                             }
                             else if (cookie.Contains("JSESSIONID="))
                             {
-                                // Also extract JSESSIONID for session management
-                                var cookieValue = cookie.Split(';')[0];
-                                _cachedJSessionId = cookieValue;
-                                Debug.WriteLine($"✓ Fetched JSESSIONID: {_cachedJSessionId}");
+                                _cachedJSessionId = cookie.Split(';')[0];
                             }
                         }
                     }
 
-                    Debug.WriteLine($"✓ Fetched CSRF token: {_cachedCsrfToken} (Status: {response.StatusCode})");
                     return _cachedCsrfToken;
                 }
 
-                Debug.WriteLine($"Warning: No CSRF token found in X-XSRF-TOKEN header (Status: {response.StatusCode})");
                 return null;
             }
             catch (Exception ex)
@@ -104,7 +98,6 @@ namespace KZ.Controllers
         {
             var request = new HttpRequestMessage(method, url);
 
-            // Add basic auth if configured
             var camundaUsername = ConfigurationManager.AppSettings["CamundaUsername"];
             var camundaPassword = ConfigurationManager.AppSettings["CamundaPassword"];
 
@@ -115,15 +108,11 @@ namespace KZ.Controllers
                 request.Headers.Authorization = new AuthenticationHeaderValue("Basic", authHeader);
             }
 
-            // Add CSRF token
             var csrfToken = await GetCsrfToken(camundaUrl);
             if (!string.IsNullOrEmpty(csrfToken))
             {
-                // Camunda uses Double Submit Cookie pattern - needs both header and cookie
-                // Use X-XSRF-TOKEN to match what Camunda sends in response
                 request.Headers.Add("X-XSRF-TOKEN", csrfToken);
 
-                // Add cookies (both JSESSIONID and XSRF-TOKEN)
                 var cookieParts = new List<string>();
                 if (!string.IsNullOrEmpty(_cachedJSessionId))
                 {
@@ -136,12 +125,35 @@ namespace KZ.Controllers
 
                 if (cookieParts.Count > 0)
                 {
-                    var cookieHeader = string.Join("; ", cookieParts);
-                    request.Headers.Add("Cookie", cookieHeader);
+                    request.Headers.Add("Cookie", string.Join("; ", cookieParts));
                 }
             }
 
             return request;
+        }
+
+        [Route("redmine/logs")]
+        [HttpGet]
+        [AllowAnonymous]
+        public IHttpActionResult GetWebhookLogs()
+        {
+            return Ok(new
+            {
+                count = _webhookLog.Count,
+                logs = _webhookLog.ToArray(),
+                note = "Showing last " + MAX_LOG_ENTRIES + " webhook calls"
+            });
+        }
+
+        private void LogWebhookCall(object logEntry)
+        {
+            _webhookLog.Enqueue(logEntry);
+
+            // Keep only last MAX_LOG_ENTRIES
+            while (_webhookLog.Count > MAX_LOG_ENTRIES)
+            {
+                _webhookLog.TryDequeue(out _);
+            }
         }
 
         [Route("redmine")]
@@ -150,26 +162,47 @@ namespace KZ.Controllers
         [ApiExplorerSettings(IgnoreApi = true)]
         public async Task<IHttpActionResult> ReceiveRedmineWebhook([FromBody] JObject payload)
         {
+            var timestamp = DateTime.UtcNow;
+            var headers = Request.Headers.ToDictionary(h => h.Key, h => string.Join(", ", h.Value));
+
             try
             {
-                Debug.WriteLine("===========================================");
-                Debug.WriteLine("🔔 REDMINE WEBHOOK RECEIVED");
-                Debug.WriteLine($"Timestamp: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
-                Debug.WriteLine($"Payload: {payload?.ToString(Formatting.Indented)}");
-                Debug.WriteLine("===========================================");
+                Debug.WriteLine("==================== REDMINE WEBHOOK RECEIVED ====================");
+                Debug.WriteLine($"Timestamp: {timestamp:yyyy-MM-dd HH:mm:ss}");
+                Debug.WriteLine($"Payload: {payload?.ToString(Formatting.Indented) ?? "NULL"}");
+                Debug.WriteLine("===================================================================");
 
-                // Extract issue from webhook payload
-                var issue = payload["issue"] as JObject;
+                // Extract issue - Redmine can send it directly or wrapped in "data"
+                JObject issue = null;
+                if (payload["issue"] != null)
+                {
+                    issue = payload["issue"] as JObject;
+                }
+                else if (payload["data"]?["issue"] != null)
+                {
+                    issue = payload["data"]["issue"] as JObject;
+                }
+
+                // Log for debugging
+                LogWebhookCall(new
+                {
+                    timestamp,
+                    headers,
+                    payload = payload?.ToString(Formatting.None) ?? "NULL",
+                    hasPayload = payload != null,
+                    hasDirectIssue = payload?["issue"] != null,
+                    hasDataIssue = payload?["data"]?["issue"] != null,
+                    extractedIssue = issue != null
+                });
+
                 if (issue == null)
                 {
-                    Debug.WriteLine("No issue in webhook payload");
-                    return Ok(new { status = "ignored", reason = "No issue data" });
+                    return Ok(new { status = "ignored", reason = "No issue data in payload" });
                 }
 
                 var issueId = issue["id"].Value<int>();
                 var subject = issue["subject"].Value<string>();
 
-                // Extract globalId from custom field
                 string globalId = null;
                 var customFields = issue["custom_fields"] as JArray;
                 if (customFields != null)
@@ -190,20 +223,21 @@ namespace KZ.Controllers
 
                 if (string.IsNullOrEmpty(globalId))
                 {
-                    Debug.WriteLine($"No globalId found in issue #{issueId}");
+                    Debug.WriteLine($"No globalId in issue #{issueId}");
                     return Ok(new { status = "warning", reason = "No globalId", issueId });
                 }
 
-                Debug.WriteLine($"Processing issue #{issueId} ({subject}) - globalId: {globalId}");
+                globalId = NormalizeGlobalId(globalId);
+                Debug.WriteLine($"Processing issue #{issueId} - GlobalID: {globalId}");
 
-                // Determine update source
                 var statusId = issue["status"]["id"].Value<int>();
                 var updateSource = COMPLETED_STATUS_IDS.Contains(statusId) ? "completed" : "redmine";
 
-                // Prepare issue data for Camunda
-                var issueData = new JObject();
-                issueData["id"] = issueId;
-                issueData["subject"] = subject;
+                var issueData = new JObject
+                {
+                    ["id"] = issueId,
+                    ["subject"] = subject
+                };
 
                 var descToken = issue["description"];
                 if (descToken != null && descToken.Type != JTokenType.Null)
@@ -238,7 +272,6 @@ namespace KZ.Controllers
                     issueData["custom_fields"] = customFields;
                 }
 
-                // Send message to Camunda with retry
                 var (success, debugInfo) = await SendToCamundaWithRetry(globalId, updateSource, issueId.ToString(), issueData);
 
                 if (success)
@@ -249,8 +282,7 @@ namespace KZ.Controllers
                         globalId,
                         issueId,
                         updateSource,
-                        timestamp = DateTime.UtcNow,
-                        debug = debugInfo
+                        timestamp = DateTime.UtcNow
                     });
                 }
                 else
@@ -258,7 +290,7 @@ namespace KZ.Controllers
                     return Ok(new
                     {
                         status = "error",
-                        reason = "Failed to correlate message after retries",
+                        reason = "Failed to correlate message",
                         globalId,
                         issueId,
                         timestamp = DateTime.UtcNow,
@@ -268,7 +300,18 @@ namespace KZ.Controllers
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error processing Redmine webhook: {ex.Message}");
+                Debug.WriteLine($"Error processing webhook: {ex.Message}");
+
+                // Log error
+                LogWebhookCall(new
+                {
+                    timestamp,
+                    headers,
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace,
+                    payload = payload?.ToString(Formatting.None) ?? "NULL"
+                });
+
                 return Ok(new
                 {
                     status = "error",
@@ -288,16 +331,39 @@ namespace KZ.Controllers
             var camundaUrl = ConfigurationManager.AppSettings["CamundaRestUrl"] ?? "http://localhost:8080/engine-rest";
             var debugLog = new List<object>();
 
+            globalId = NormalizeGlobalId(globalId);
+
+            var subject = issueData["subject"]?.Value<string>() ?? "";
+            var description = issueData["description"]?.Value<string>() ?? "";
+            var statusId = issueData["statusId"]?.Value<int>() ?? 1;
+
+            int arcgisStatus;
+            switch (statusId)
+            {
+                case 1: arcgisStatus = 6; break;
+                case 2: arcgisStatus = 1; break;
+                case 3: arcgisStatus = 4; break;
+                case 5: arcgisStatus = 5; break;
+                case 6: arcgisStatus = 5; break;
+                default: arcgisStatus = 0; break;
+            }
+
+            var normalizedGlobalId = NormalizeGlobalId(globalId);
+
             var message = new
             {
                 messageName = "TaskUpdate",
-                businessKey = globalId,
+                businessKey = normalizedGlobalId,
                 processVariables = new
                 {
-                    GlobalID = new { value = globalId, type = "String" },  // CRITICAL: Set GlobalID for Task_SyncToNet
+                    GlobalID = new { value = normalizedGlobalId, type = "String" },
                     updateSource = new { value = updateSource, type = "String" },
                     redmineIssueId = new { value = redmineIssueId, type = "String" },
-                    updateData = new { value = issueData.ToString(Formatting.None), type = "Json" }
+                    updateData = new { value = issueData.ToString(Formatting.None), type = "String" },
+                    Pavadinimas = new { value = subject, type = "String" },
+                    Aprasymas = new { value = description, type = "String" },
+                    Statusas = new { value = arcgisStatus.ToString(), type = "String" },
+                    redmineStatusId = new { value = statusId.ToString(), type = "String" }
                 }
             };
 
@@ -310,8 +376,7 @@ namespace KZ.Controllers
                     var json = JsonConvert.SerializeObject(message);
                     var url = $"{camundaUrl}/message";
 
-                    Debug.WriteLine($"📤 Attempt {attempt}: Sending to Camunda: {url}");
-                    Debug.WriteLine($"📦 Payload: {json}");
+                    Debug.WriteLine($"Attempt {attempt}: Sending to Camunda");
 
                     var request = await CreateAuthenticatedRequest(HttpMethod.Post, url, camundaUrl);
                     request.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -332,7 +397,6 @@ namespace KZ.Controllers
                         return (true, debugLog);
                     }
 
-                    // Check if it's a correlation error (no matching process instance)
                     if (response.StatusCode == HttpStatusCode.BadRequest)
                     {
                         if (responseContent.Contains("MismatchingMessageCorrelationException") ||
@@ -352,7 +416,6 @@ namespace KZ.Controllers
                         }
                     }
 
-                    // For other errors, don't retry
                     return (false, debugLog);
                 }
                 catch (Exception ex)
@@ -379,35 +442,27 @@ namespace KZ.Controllers
             {
                 if (string.IsNullOrEmpty(globalId))
                 {
-                    Debug.WriteLine("No globalId provided");
                     return BadRequest("globalId is required");
                 }
 
-                Debug.WriteLine($"ReceiveCamundaUpdate called for globalId: {globalId}");
-                Debug.WriteLine($"Payload: {payload}");
+                globalId = NormalizeGlobalId(globalId);
+                Debug.WriteLine($"ReceiveCamundaUpdate: {globalId}");
 
-                // Extract the actual task data from the nested structure
                 JObject taskData = payload["updateData"] as JObject;
-
                 if (taskData == null)
                 {
-                    Debug.WriteLine("updateData property is missing or invalid");
-                    return BadRequest("updateData property is missing or invalid");
+                    return BadRequest("updateData property is missing");
                 }
 
-                Debug.WriteLine($"TaskData: {taskData}");
-
-                // Build the update payload for ArcGIS
                 JArray editsArray = new JArray();
                 JObject layerEdit = new JObject();
-                layerEdit["id"] = 0; // Layer ID for tasks
+                layerEdit["id"] = 0;
 
                 JArray updatesArray = new JArray();
                 JObject featureUpdate = new JObject();
                 JObject attributes = new JObject();
-                attributes["GlobalID"] = globalId;
+                attributes["GlobalID"] = "{" + globalId + "}";
 
-                // Map fields from Redmine to ArcGIS attributes
                 if (taskData.ContainsKey("description") && taskData["description"] != null)
                 {
                     string description = taskData["description"].ToString();
@@ -428,35 +483,21 @@ namespace KZ.Controllers
 
                 if (taskData.ContainsKey("statusId") && taskData["statusId"] != null)
                 {
-                    Debug.WriteLine($"Statusas: {taskData["statusId"]}");
                     int status = Convert.ToInt32(taskData["statusId"]);
                     int arcgisStatus;
 
-                    // Map Redmine status to ArcGIS status
                     switch (status)
                     {
-                        case 1: // New
-                            arcgisStatus = 6;
-                            break;
-                        case 2: // In Progress
-                            arcgisStatus = 1;
-                            break;
-                        case 3: // Resolved
-                            arcgisStatus = 4;
-                            break;
-                        case 5: // Closed
-                            arcgisStatus = 5;
-                            break;
-                        case 6: // Rejected
-                            arcgisStatus = 5;
-                            break;
-                        default:
-                            arcgisStatus = 0;
-                            break;
+                        case 1: arcgisStatus = 6; break;
+                        case 2: arcgisStatus = 1; break;
+                        case 3: arcgisStatus = 4; break;
+                        case 5: arcgisStatus = 5; break;
+                        case 6: arcgisStatus = 5; break;
+                        default: arcgisStatus = 0; break;
                     }
 
                     attributes["Statusas"] = arcgisStatus;
-                    Debug.WriteLine($"Mapping Statusas: {status} -> {arcgisStatus}");
+                    Debug.WriteLine($"Status mapping: {status} -> {arcgisStatus}");
                 }
 
                 featureUpdate["attributes"] = attributes;
@@ -464,13 +505,9 @@ namespace KZ.Controllers
                 layerEdit["updates"] = updatesArray;
                 editsArray.Add(layerEdit);
 
-                // Call FeatureRepository.ApplyEdits to update ArcGIS
                 var featureRepository = new Data.FeatureRepository();
                 JObject result = featureRepository.ApplyEdits("tasks", editsArray);
 
-                Debug.WriteLine($"ApplyEdits result: {result}");
-
-                // CRITICAL FIX: Update SQL database after successful ArcGIS update
                 bool arcgisSuccess = false;
                 if (result != null && result["res"] != null)
                 {
@@ -495,7 +532,7 @@ namespace KZ.Controllers
 
                 if (arcgisSuccess)
                 {
-                    Debug.WriteLine("✓ ArcGIS update successful, now updating SQL database...");
+                    Debug.WriteLine("ArcGIS update successful, updating SQL...");
 
                     try
                     {
@@ -508,65 +545,51 @@ namespace KZ.Controllers
                             {
                                 connection.Open();
 
-                                var sqlParts = new System.Collections.Generic.List<string>();
-                                var parameters = new System.Collections.Generic.Dictionary<string, object>();
+                                var sqlParts = new List<string>();
+                                var parameters = new System.Data.SqlClient.SqlCommand();
 
-                                // Handle GlobalID format - database stores lowercase without braces
-                                string cleanGlobalId = globalId.Replace("{", "").Replace("}", "").ToLower();
-                                parameters["@cleanGlobalId"] = cleanGlobalId;
+                                parameters.Parameters.AddWithValue("@globalId", globalId);
 
-                                // Build dynamic SQL UPDATE statement based on what fields were updated
                                 if (attributes.ContainsKey("Pavadinimas"))
                                 {
                                     sqlParts.Add("Pavadinimas = @pavadinimas");
-                                    parameters["@pavadinimas"] = attributes["Pavadinimas"].ToString();
+                                    parameters.Parameters.AddWithValue("@pavadinimas", attributes["Pavadinimas"].ToString());
                                 }
 
                                 if (attributes.ContainsKey("Aprasymas"))
                                 {
                                     sqlParts.Add("Aprasymas = @aprasymas");
-                                    parameters["@aprasymas"] = attributes["Aprasymas"].ToString();
+                                    parameters.Parameters.AddWithValue("@aprasymas", attributes["Aprasymas"].ToString());
                                 }
 
                                 if (attributes.ContainsKey("Statusas"))
                                 {
                                     sqlParts.Add("Statusas = @statusas");
-                                    parameters["@statusas"] = attributes["Statusas"];
+                                    parameters.Parameters.AddWithValue("@statusas", attributes["Statusas"]);
                                 }
 
                                 if (sqlParts.Count > 0)
                                 {
-                                    // Database stores GlobalID as lowercase without curly braces
-                                    string sql = $"UPDATE {tablePart1}.UZDUOTYS_PROJ SET {string.Join(", ", sqlParts)} WHERE LOWER(GlobalID) = @cleanGlobalId";
+                                    string sql = $"UPDATE {tablePart1}.UZDUOTYS_PROJ SET {string.Join(", ", sqlParts)} WHERE REPLACE(REPLACE(UPPER(GlobalID), '{{', ''), '}}', '') = @globalId";
 
                                     using (var command = new System.Data.SqlClient.SqlCommand(sql, connection))
                                     {
-                                        foreach (var param in parameters)
+                                        foreach (System.Data.SqlClient.SqlParameter param in parameters.Parameters)
                                         {
-                                            command.Parameters.AddWithValue(param.Key, param.Value);
+                                            command.Parameters.Add(new System.Data.SqlClient.SqlParameter(param.ParameterName, param.Value));
                                         }
 
                                         int rowsAffected = command.ExecuteNonQuery();
-                                        Debug.WriteLine($"✓ SQL database updated: {rowsAffected} row(s) affected for GlobalID {globalId}");
+                                        Debug.WriteLine($"SQL updated: {rowsAffected} row(s)");
                                     }
                                 }
                             }
                         }
-                        else
-                        {
-                            Debug.WriteLine("⚠ WARNING: DbConnectionString or TableFirstPart not configured, skipping SQL update");
-                        }
                     }
                     catch (Exception sqlEx)
                     {
-                        Debug.WriteLine($"❌ ERROR updating SQL database: {sqlEx.Message}");
-                        Debug.WriteLine($"Stack trace: {sqlEx.StackTrace}");
-                        // Don't fail the whole request if SQL update fails - ArcGIS is source of truth
+                        Debug.WriteLine($"SQL update error: {sqlEx.Message}");
                     }
-                }
-                else
-                {
-                    Debug.WriteLine("⚠ ArcGIS update was not successful, skipping SQL database update");
                 }
 
                 return Ok(new

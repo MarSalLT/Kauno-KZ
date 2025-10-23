@@ -469,20 +469,23 @@ namespace KZ.Data
             string date = DateTimeOffset.FromUnixTimeSeconds(seconds).ToString(string.Format("yyyy-MM-ddTHH:mm:ss+0{0}00", offset)); // FIXME...
             return date;
         }
+
+        private string NormalizeGlobalId(string globalId)
+        {
+            if (string.IsNullOrEmpty(globalId)) return globalId;
+            return globalId.Replace("{", "").Replace("}", "").ToUpper();
+        }
+
         public JObject NotifyAboutChangeToTasksSystem(NotifyAboutChangeToTasksSystem model)
         {
-            System.Diagnostics.Debug.WriteLine($"Redmine PART START");
+            System.Diagnostics.Debug.WriteLine($"NotifyAboutChangeToTasksSystem START");
 
             JObject result = new JObject();
             bool status = false;
 
             JObject taskData = GetTaskData(model.Id, true, false, null, true, true);
 
-            System.Diagnostics.Debug.WriteLine("- - -");
-            System.Diagnostics.Debug.WriteLine(model.Id);
-            System.Diagnostics.Debug.WriteLine(model.ActionType);
-            System.Diagnostics.Debug.WriteLine("- - -");
-            System.Diagnostics.Debug.WriteLine(taskData);
+            System.Diagnostics.Debug.WriteLine($"Action: {model.ActionType}, ID: {model.Id}");
 
             if (taskData == null || !taskData.ContainsKey("attributes"))
             {
@@ -501,43 +504,85 @@ namespace KZ.Data
                 return result;
             }
 
+            globalId = NormalizeGlobalId(globalId);
+
             try
             {
-
-                if (model.ActionType == "delegation") {
-                    System.Diagnostics.Debug.WriteLine($"No process found for GlobalID {globalId}. Starting new process.");
+                if (model.ActionType == "delegation")
+                {
+                    System.Diagnostics.Debug.WriteLine($"Starting new process for {globalId}");
                     status = StartCamundaProcess(taskData);
+
+                    if (status)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Process started successfully, updating SQL database for {globalId}");
+
+                        try
+                        {
+                            var connectionString = System.Configuration.ConfigurationManager.AppSettings["DbConnectionString"];
+                            var tablePart1 = System.Configuration.ConfigurationManager.AppSettings["TableFirstPart"];
+
+                            if (!string.IsNullOrEmpty(connectionString) && !string.IsNullOrEmpty(tablePart1))
+                            {
+                                using (var connection = new System.Data.SqlClient.SqlConnection(connectionString))
+                                {
+                                    connection.Open();
+
+                                    // Update status to 6 (Delegated/New) after delegation
+                                    string sql = $"UPDATE {tablePart1}.UZDUOTYS_PROJ SET Statusas = 6 WHERE REPLACE(REPLACE(UPPER(GlobalID), '{{', ''), '}}', '') = @globalId";
+
+                                    using (var command = new System.Data.SqlClient.SqlCommand(sql, connection))
+                                    {
+                                        command.Parameters.AddWithValue("@globalId", globalId);
+                                        int rowsAffected = command.ExecuteNonQuery();
+                                        System.Diagnostics.Debug.WriteLine($"✓ SQL database updated: {rowsAffected} row(s) affected for GlobalID {globalId}");
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception sqlEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"⚠ SQL update error: {sqlEx.Message}");
+                            // Don't fail the entire operation if SQL update fails
+                        }
+                    }
                 }
                 else if (model.ActionType == "update")
                 {
-                    // Check if a Camunda process already exists for this GlobalID
-                    string processInstanceId = GetCamundaProcessInstanceByBusinessKey(globalId);
-                    if (!string.IsNullOrEmpty(processInstanceId))
+                    System.Diagnostics.Debug.WriteLine($"Sending update for {globalId}");
+                    var camundaService = new Services.CamundaProcessService();
+                    // Use Task.Run to avoid deadlock in sync context
+                    System.Threading.Tasks.Task.Run(async () =>
                     {
-                        // Process exists, trigger the sync-to-redmine worker with updated task data
-                        System.Diagnostics.Debug.WriteLine($"Process exists for GlobalID {globalId}. Triggering sync-to-redmine worker.");
-                        status = TriggerSyncToRedmineWorker(processInstanceId, taskData);
-                    }
+                        await camundaService.SendTaskUpdateMessage(globalId, "dotnet", taskData);
+                    }).Wait();
+                    status = true;
+                    System.Diagnostics.Debug.WriteLine($"Update sent successfully for {globalId}");
                 }
                 else if (model.ActionType == "cancel_task")
                 {
-                    // Check if a Camunda process already exists for this GlobalID
                     string processInstanceId = GetCamundaProcessInstanceByBusinessKey(globalId);
                     if (!string.IsNullOrEmpty(processInstanceId))
                     {
-
                         taskData["attributes"]["Statusas"] = 5;
-                        // Process exists, trigger the sync-to-redmine worker with updated task data
-                        System.Diagnostics.Debug.WriteLine($"Process exists for GlobalID {globalId}. Triggering sync-to-redmine worker.");
+                        System.Diagnostics.Debug.WriteLine($"Cancelling task {globalId}");
                         status = TriggerSyncToRedmineWorker(processInstanceId, taskData);
                     }
                 }
-
             }
             catch (Exception e)
             {
                 result.Add("ERR", e.ToString());
-                System.Diagnostics.Debug.WriteLine($"Error in NotifyAboutChangeToTasksSystem: {e.Message}");
+                System.Diagnostics.Debug.WriteLine("==================== ERROR ====================");
+                System.Diagnostics.Debug.WriteLine($"Exception Type: {e.GetType().Name}");
+                System.Diagnostics.Debug.WriteLine($"Message: {e.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack Trace: {e.StackTrace}");
+                if (e.InnerException != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Inner Exception: {e.InnerException.Message}");
+                    System.Diagnostics.Debug.WriteLine($"Inner Stack: {e.InnerException.StackTrace}");
+                }
+                System.Diagnostics.Debug.WriteLine("===============================================");
             }
 
             if (status)
@@ -569,43 +614,31 @@ namespace KZ.Data
                     return false;
                 }
 
+                string globalId = NormalizeGlobalId(attributes["GlobalID"].ToString());
+
                 var camundaUrl = WebConfigurationManager.AppSettings["CamundaRestUrl"];
                 var client = new RestClient(camundaUrl);
-                client.Timeout = 300000; // Set timeout to 5 minutes (300 seconds)
+                client.Timeout = 300000;
                 var request = new RestRequest("process-definition/key/task-redmine-sync/start", Method.POST);
 
-                Debug.WriteLine($"=== Camunda Request Details ===");
-                Debug.WriteLine($"Base URL: {camundaUrl}");
-                Debug.WriteLine($"Resource: {request.Resource}");
-                Debug.WriteLine($"Full URL: {client.BuildUri(request)}");
-                Debug.WriteLine($"Method: {request.Method}");
+                Debug.WriteLine($"Starting process for {globalId}");
 
                 AddCamundaAuthHeaders(request, camundaUrl);
 
-                // Build variables dynamically from all attributes
                 var variables = new Dictionary<string, object>();
 
-                // Add configuration variables required by Camunda process
                 var redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"] ?? "http://localhost:8088";
                 var redmineApiKey = WebConfigurationManager.AppSettings["RedmineApiKey"] ?? "";
                 var redmineProjectId = WebConfigurationManager.AppSettings["RedmineProjectId"] ?? "5";
                 var dotnetApiUrl = WebConfigurationManager.AppSettings["DotNetApiUrl"] ?? "http://localhost:3001";
 
-                // Use lowercase type names as per Camunda REST API specification
                 variables["redmineUrl"] = new { value = redmineUrl, type = "string" };
                 variables["redmineApiKey"] = new { value = redmineApiKey, type = "string" };
                 variables["redmineProjectId"] = new { value = redmineProjectId, type = "string" };
                 variables["dotnetApiUrl"] = new { value = dotnetApiUrl, type = "string" };
 
-                Debug.WriteLine($"Added configuration variables:");
-                Debug.WriteLine($"  redmineUrl: {redmineUrl}");
-                Debug.WriteLine($"  redmineProjectId: {redmineProjectId}");
-                Debug.WriteLine($"  dotnetApiUrl: {dotnetApiUrl}");
+                Debug.WriteLine($"Config vars added");
 
-                Debug.WriteLine($"=== Processing Attributes ===");
-                Debug.WriteLine($"Total attributes to process: {attributes.Count}");
-
-                // Add all individual attributes as separate variables
                 foreach (var attribute in attributes)
                 {
                     string key = attribute.Key;
@@ -615,7 +648,6 @@ namespace KZ.Data
                     {
                         string stringValue;
 
-                        // Handle different JToken types to avoid Spin JSON parsing issues
                         switch (value.Type)
                         {
                             case JTokenType.String:
@@ -624,23 +656,14 @@ namespace KZ.Data
                             case JTokenType.Boolean:
                             case JTokenType.Date:
                             case JTokenType.Guid:
-                                // Simple types - get the actual value
                                 stringValue = ((JValue)value).Value?.ToString() ?? "";
                                 variables[key] = new { value = stringValue, type = "string" };
-
-                                // Debug key variables
-                                if (key == "Pavadinimas" || key == "Aprasymas" || key == "GlobalID")
-                                {
-                                    Debug.WriteLine($"✓ Added key variable '{key}' = '{stringValue.Substring(0, Math.Min(50, stringValue.Length))}...' (type: {value.Type})");
-                                }
                                 break;
                             case JTokenType.Object:
                             case JTokenType.Array:
-                                // Complex types - skip them to avoid Spin parsing issues
-                                Debug.WriteLine($"⚠ Skipping complex attribute '{key}' (type: {value.Type})");
+                                Debug.WriteLine($"Skipping complex attribute '{key}'");
                                 break;
                             default:
-                                // Fallback for other types
                                 stringValue = value.ToString();
                                 variables[key] = new { value = stringValue, type = "string" };
                                 break;
@@ -648,7 +671,6 @@ namespace KZ.Data
                     }
                 }
 
-                // Add attachments array as JSON string if present
                 if (taskData.ContainsKey("attachments") && taskData["attachments"] != null)
                 {
                     var attachmentsToken = taskData["attachments"];
@@ -663,7 +685,6 @@ namespace KZ.Data
                     }
                 }
 
-                // Add related-features array as JSON string if present
                 if (taskData.ContainsKey("related-features") && taskData["related-features"] != null)
                 {
                     var relatedFeaturesToken = taskData["related-features"];
@@ -678,52 +699,41 @@ namespace KZ.Data
                     }
                 }
 
-                // CRITICAL: Add GlobalID as explicit variable for BPMN Task_SyncToNet
                 if (attributes.ContainsKey("GlobalID") && attributes["GlobalID"] != null)
                 {
-                    string globalIdValue = attributes["GlobalID"].ToString();
-                    variables["GlobalID"] = new { value = globalIdValue, type = "string" };
-                    Debug.WriteLine($"✓ EXPLICIT GlobalID variable set: {globalIdValue}");
+                    variables["GlobalID"] = new { value = globalId, type = "string" };
                 }
 
-                // Add custom field variables for BPMN to use
-                // Custom field 1: GlobalID (without braces for Redmine)
                 if (attributes.ContainsKey("GlobalID") && attributes["GlobalID"] != null)
                 {
-                    variables["customField_1"] = new { value = attributes["GlobalID"].ToString().Replace("{", "").Replace("}", ""), type = "string" };
+                    variables["customField_11"] = new { value = globalId, type = "string" };
                 }
 
-                // Custom field 2: uzsakovo_email
                 if (attributes.ContainsKey("uzsakovo_email") && attributes["uzsakovo_email"] != null)
                 {
                     variables["customField_2"] = new { value = attributes["uzsakovo_email"].ToString(), type = "string" };
                 }
 
-                // Custom field 5: Adresas
                 if (attributes.ContainsKey("Adresas") && attributes["Adresas"] != null)
                 {
                     variables["customField_5"] = new { value = attributes["Adresas"].ToString(), type = "string" };
                 }
 
-                // Custom field 6: X
                 if (attributes.ContainsKey("X") && attributes["X"] != null)
                 {
                     variables["customField_6"] = new { value = attributes["X"].ToString(), type = "string" };
                 }
 
-                // Custom field 7: Y
                 if (attributes.ContainsKey("Y") && attributes["Y"] != null)
                 {
                     variables["customField_7"] = new { value = attributes["Y"].ToString(), type = "string" };
                 }
 
-                // Custom field 8: URL
                 if (attributes.ContainsKey("URL") && attributes["URL"] != null)
                 {
                     variables["customField_8"] = new { value = attributes["URL"].ToString(), type = "string" };
                 }
 
-                // Custom field 9: Uzduoties_tipas (with mapping)
                 if (attributes.ContainsKey("Uzduoties_tipas") && attributes["Uzduoties_tipas"] != null)
                 {
                     string tipas = attributes["Uzduoties_tipas"].ToString().Trim();
@@ -737,7 +747,6 @@ namespace KZ.Data
                     variables["customField_9"] = new { value = mappedTipas, type = "string" };
                 }
 
-                // Custom field 10: Teritorija (with mapping - MUST match Redmine list exactly)
                 if (attributes.ContainsKey("Teritorija") && attributes["Teritorija"] != null)
                 {
                     string teritorija = attributes["Teritorija"].ToString().Trim();
@@ -760,8 +769,7 @@ namespace KZ.Data
                     variables["customField_10"] = new { value = mappedTeritorija, type = "string" };
                 }
 
-                // Dynamic Project ID based on Imone field
-                string dynamicProjectId = redmineProjectId; // Default
+                string dynamicProjectId = redmineProjectId;
                 if (attributes.ContainsKey("Imone") && attributes["Imone"] != null)
                 {
                     string imone = attributes["Imone"].ToString().Trim();
@@ -774,11 +782,10 @@ namespace KZ.Data
                 }
                 variables["redmineProjectId"] = new { value = dynamicProjectId, type = "string" };
 
-                // Priority mapping based on Svarba
                 if (attributes.ContainsKey("Svarba") && attributes["Svarba"] != null)
                 {
                     string svarba = attributes["Svarba"].ToString().ToLower().Trim();
-                    string priorityId = "2"; // Default: medium
+                    string priorityId = "2";
                     switch (svarba)
                     {
                         case "low": priorityId = "1"; break;
@@ -789,7 +796,6 @@ namespace KZ.Data
                     variables["redminePriority"] = new { value = priorityId, type = "string" };
                 }
 
-                // Due date with timezone fix
                 if (attributes.ContainsKey("Pabaigos_data") && attributes["Pabaigos_data"] != null)
                 {
                     try
@@ -797,59 +803,33 @@ namespace KZ.Data
                         DateTime dueDate;
                         if (DateTime.TryParse(attributes["Pabaigos_data"].ToString(), out dueDate))
                         {
-                            dueDate = dueDate.AddHours(12); // Timezone fix
+                            dueDate = dueDate.AddHours(12);
                             variables["redmineDueDate"] = new { value = dueDate.ToString("yyyy-MM-dd"), type = "string" };
                         }
                     }
                     catch { }
                 }
 
-                // Category ID (only for project 4)
                 if (dynamicProjectId == "4")
                 {
                     variables["redmineCategoryId"] = new { value = "1", type = "string" };
                 }
 
-                // Add complete taskData as JSON for reference (as string, not json to avoid Spin parsing)
                 variables["taskDataJson"] = new { value = taskData.ToString(Newtonsoft.Json.Formatting.None), type = "string" };
 
                 var camundaPayload = new
                 {
                     variables = variables,
-                    businessKey = attributes["GlobalID"].ToString()
+                    businessKey = globalId
                 };
 
-                Debug.WriteLine($"=== Final Payload ===");
                 Debug.WriteLine($"Total variables: {variables.Count}");
-                Debug.WriteLine($"Business key: {attributes["GlobalID"].ToString()}");
-
-                // Serialize payload to see exact structure
-                var payloadJson = Newtonsoft.Json.JsonConvert.SerializeObject(camundaPayload, Newtonsoft.Json.Formatting.Indented);
-                Debug.WriteLine($"Payload preview (first 1000 chars):");
-                Debug.WriteLine(payloadJson.Substring(0, Math.Min(1000, payloadJson.Length)));
 
                 request.AddJsonBody(camundaPayload);
 
-                Debug.WriteLine($"=== Executing Camunda Request ===");
-                Debug.WriteLine($"Sending POST request to start process instance...");
-
-                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
                 IRestResponse response = client.Execute(request);
-                stopwatch.Stop();
 
-                Debug.WriteLine($"⏱ Request completed in {stopwatch.ElapsedMilliseconds}ms");
-                Debug.WriteLine($"Response status: {response.StatusCode} ({(int)response.StatusCode})");
-                Debug.WriteLine($"Response status description: {response.StatusDescription}");
-                Debug.WriteLine($"Response error message: {response.ErrorMessage ?? "None"}");
-                Debug.WriteLine($"Response content length: {response.Content?.Length ?? 0} characters");
-
-                if (!string.IsNullOrEmpty(response.Content))
-                {
-                    Debug.WriteLine($"Response content: {response.Content}");
-                }
-
-                System.Diagnostics.Debug.WriteLine($"Camunda response status: {response.StatusCode}");
-                System.Diagnostics.Debug.WriteLine($"Camunda response content: {response.Content}");
+                Debug.WriteLine($"Response: {response.StatusCode}");
 
                 if (response.IsSuccessful)
                 {
@@ -857,7 +837,7 @@ namespace KZ.Data
                 }
                 else
                 {
-                    System.Diagnostics.Debug.WriteLine($"Camunda request failed: {response.StatusCode} - {response.ErrorMessage}");
+                    System.Diagnostics.Debug.WriteLine($"Camunda failed: {response.StatusCode} - {response.ErrorMessage}");
                     return false;
                 }
             }
@@ -872,6 +852,8 @@ namespace KZ.Data
         {
             try
             {
+                businessKey = NormalizeGlobalId(businessKey);
+
                 var camundaUrl = WebConfigurationManager.AppSettings["CamundaRestUrl"];
                 var client = new RestClient(camundaUrl);
                 var request = new RestRequest("process-instance", Method.GET);
@@ -880,8 +862,7 @@ namespace KZ.Data
 
                 IRestResponse response = client.Execute(request);
 
-                System.Diagnostics.Debug.WriteLine($"GetCamundaProcessInstanceByBusinessKey response status: {response.StatusCode}");
-                System.Diagnostics.Debug.WriteLine($"GetCamundaProcessInstanceByBusinessKey response content: {response.Content}");
+                System.Diagnostics.Debug.WriteLine($"GetCamundaProcessInstanceByBusinessKey: {response.StatusCode}");
 
                 if (response.IsSuccessful && !string.IsNullOrEmpty(response.Content))
                 {
@@ -890,21 +871,20 @@ namespace KZ.Data
                     {
                         JObject firstInstance = (JObject)processInstances[0];
                         string processInstanceId = firstInstance["id"]?.ToString();
-                        System.Diagnostics.Debug.WriteLine($"Found process instance: {processInstanceId}");
+                        System.Diagnostics.Debug.WriteLine($"Found process: {processInstanceId}");
                         return processInstanceId;
                     }
                 }
 
-                System.Diagnostics.Debug.WriteLine($"No process instance found for businessKey: {businessKey}");
+                System.Diagnostics.Debug.WriteLine($"No process found for: {businessKey}");
                 return null;
             }
             catch (Exception e)
             {
-                System.Diagnostics.Debug.WriteLine($"Error in GetCamundaProcessInstanceByBusinessKey: {e.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error: {e.Message}");
                 return null;
             }
         }
-
         private bool TriggerSyncToRedmineWorker(string processInstanceId, JObject taskData)
         {
             try
@@ -1080,7 +1060,7 @@ namespace KZ.Data
                     JObject updateAttributes = new JObject();
                     updateAttributes["GlobalID"] = globalId;
                     updateAttributes["Patvirtinimas"] = 1;
-                    updateAttributes["Statusas"] = 4;
+                    updateAttributes["Statusas"] = 2;
                     featureUpdate["attributes"] = updateAttributes;
                     updatesArray.Add(featureUpdate);
 
