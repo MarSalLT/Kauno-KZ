@@ -549,15 +549,64 @@ namespace KZ.Data
                 }
                 else if (model.ActionType == "update")
                 {
-                    System.Diagnostics.Debug.WriteLine($"Sending update for {globalId}");
+                    System.Diagnostics.Debug.WriteLine($"Checking if process exists for {globalId}");
                     var camundaService = new Services.CamundaProcessService();
-                    // Use Task.Run to avoid deadlock in sync context
+
+                    // Check if process instance exists first
+                    bool processExists = false;
                     System.Threading.Tasks.Task.Run(async () =>
                     {
-                        await camundaService.SendTaskUpdateMessage(globalId, "dotnet", taskData);
+                        processExists = await camundaService.ProcessInstanceExists(globalId);
                     }).Wait();
-                    status = true;
-                    System.Diagnostics.Debug.WriteLine($"Update sent successfully for {globalId}");
+
+                    if (processExists)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Process exists, sending update for {globalId}");
+                        // Use Task.Run to avoid deadlock in sync context
+                        System.Threading.Tasks.Task.Run(async () =>
+                        {
+                            await camundaService.SendTaskUpdateMessage(globalId, "dotnet", taskData);
+                        }).Wait();
+                        status = true;
+                        System.Diagnostics.Debug.WriteLine($"Update sent successfully for {globalId}");
+
+                        // Sync attachments directly to Redmine if present
+                        if (taskData.ContainsKey("attachments") && taskData["attachments"] is JArray)
+                        {
+                            var attachments = taskData["attachments"] as JArray;
+                            if (attachments != null && attachments.Count > 0)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Found {attachments.Count} attachments, syncing directly to Redmine...");
+                                try
+                                {
+                                    System.Threading.Tasks.Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            await SyncAttachmentsToRedmine(globalId, attachments);
+                                        }
+                                        catch (Exception attachEx)
+                                        {
+                                            System.Diagnostics.Debug.WriteLine($"✗ Exception in SyncAttachmentsToRedmine: {attachEx.Message}");
+                                            System.Diagnostics.Debug.WriteLine($"Stack: {attachEx.StackTrace}");
+                                        }
+                                    }).Wait();
+                                    System.Diagnostics.Debug.WriteLine($"✓ Attachment sync completed");
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"✗ Exception waiting for attachment sync: {ex.Message}");
+                                    System.Diagnostics.Debug.WriteLine($"Stack: {ex.StackTrace}");
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"⚠ No process instance found for {globalId}, skipping update");
+                        System.Diagnostics.Debug.WriteLine($"Task must be delegated to Redmine first before updates can be sent");
+                        status = true; // Don't fail the operation
+                    }
                 }
                 else if (model.ActionType == "cancel_task")
                 {
@@ -1158,10 +1207,13 @@ namespace KZ.Data
                 var messageRequest = new RestRequest("message", Method.POST);
                 AddCamundaAuthHeaders(messageRequest, camundaUrl);
 
+                // Normalize globalId (remove curly braces, uppercase)
+                var normalizedGlobalId = NormalizeGlobalId(globalId);
+
                 var messagePayload = new
                 {
                     messageName = "ValidationUpdate",
-                    businessKey = globalId,
+                    businessKey = normalizedGlobalId,
                     processVariables = new{
                         validationResult = new { value = statusName, type = "String" },
                     }
@@ -1647,6 +1699,225 @@ namespace KZ.Data
             }
 
             return result;
+        }
+
+        private async Task SyncAttachmentsToRedmine(string globalId, JArray attachments)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"==================== SYNC ATTACHMENTS TO REDMINE ====================");
+                System.Diagnostics.Debug.WriteLine($"GlobalID: {globalId}");
+                System.Diagnostics.Debug.WriteLine($"Attachments count: {attachments.Count}");
+
+                // Get Redmine issue ID from Camunda process instance
+                var processInstanceId = GetCamundaProcessInstanceByBusinessKey(globalId);
+                if (string.IsNullOrEmpty(processInstanceId))
+                {
+                    System.Diagnostics.Debug.WriteLine($"No Camunda process found for {globalId}, cannot sync attachments");
+                    return;
+                }
+
+                // Get redmineIssueId from Camunda process variables
+                var camundaUrl = WebConfigurationManager.AppSettings["CamundaRestUrl"];
+                var client = new RestClient(camundaUrl);
+                var request = new RestRequest($"process-instance/{processInstanceId}/variables/redmineIssueId", Method.GET);
+                AddCamundaAuthHeaders(request, camundaUrl);
+
+                IRestResponse response = client.Execute(request);
+                if (!response.IsSuccessful)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to get redmineIssueId from Camunda: {response.StatusCode}");
+                    return;
+                }
+
+                JObject variableData = JObject.Parse(response.Content);
+                string redmineIssueId = variableData["value"]?.ToString();
+
+                if (string.IsNullOrEmpty(redmineIssueId))
+                {
+                    System.Diagnostics.Debug.WriteLine($"No redmineIssueId found in process variables");
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Redmine Issue ID: {redmineIssueId}");
+
+                // Get existing attachments from Redmine to avoid duplicates and detect deletions
+                var redmineUrl = WebConfigurationManager.AppSettings["RedmineApiUrl"];
+                var redmineExternalUrl = WebConfigurationManager.AppSettings["RedmineExternalUrl"] ?? redmineUrl;
+                var redmineApiKey = WebConfigurationManager.AppSettings["RedmineApiKey"];
+
+                // Use external URL for API calls from .NET
+                var getIssueRequest = new RestRequest($"{redmineExternalUrl}/issues/{redmineIssueId}.json?include=attachments", Method.GET);
+                getIssueRequest.AddHeader("X-Redmine-API-Key", redmineApiKey);
+
+                var redmineClient = new RestClient();
+                var issueResponse = redmineClient.Execute(getIssueRequest);
+
+                var existingAttachmentIds = new HashSet<string>();
+                var existingAttachmentsByIdentifier = new Dictionary<string, string>(); // identifier -> redmine attachment id
+                if (issueResponse.IsSuccessful)
+                {
+                    var issueData = JObject.Parse(issueResponse.Content);
+                    var existingAttachments = issueData["issue"]?["attachments"] as JArray;
+                    if (existingAttachments != null)
+                    {
+                        foreach (var att in existingAttachments)
+                        {
+                            var filename = att["filename"]?.ToString();
+                            var filesize = att["filesize"]?.ToString();
+                            var redmineAttId = att["id"]?.ToString();
+                            if (!string.IsNullOrEmpty(filename) && !string.IsNullOrEmpty(filesize))
+                            {
+                                // Remove extension from filename to get the attachment ID
+                                var filenameWithoutExt = System.IO.Path.GetFileNameWithoutExtension(filename);
+                                // Create a unique identifier based on attachment ID and size
+                                var identifier = $"{filenameWithoutExt}:{filesize}";
+                                existingAttachmentIds.Add(identifier);
+                                if (!string.IsNullOrEmpty(redmineAttId))
+                                {
+                                    existingAttachmentsByIdentifier[identifier] = redmineAttId;
+                                }
+                                System.Diagnostics.Debug.WriteLine($"Existing attachment in Redmine: {identifier} (Redmine ID: {redmineAttId})");
+                            }
+                        }
+                    }
+                }
+
+                // Detect and delete attachments that exist in Redmine but not in ArcGIS
+                var arcgisAttachmentIdentifiers = new HashSet<string>();
+                foreach (var att in attachments)
+                {
+                    var url = att["url"]?.ToString();
+                    var size = att["size"]?.ToString();
+                    if (!string.IsNullOrEmpty(url))
+                    {
+                        var urlParts = url.Split('/');
+                        var attachmentId = urlParts.Length >= 2 ? urlParts[urlParts.Length - 1] : "unknown";
+                        var identifier = $"{attachmentId}:{size}";
+                        arcgisAttachmentIdentifiers.Add(identifier);
+                    }
+                }
+
+                var attachmentsToDelete = existingAttachmentIds.Except(arcgisAttachmentIdentifiers).ToList();
+                if (attachmentsToDelete.Count > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Found {attachmentsToDelete.Count} attachments to delete from Redmine: {string.Join(", ", attachmentsToDelete)}");
+
+                    foreach (var identifier in attachmentsToDelete)
+                    {
+                        try
+                        {
+                            var redmineAttachmentId = existingAttachmentsByIdentifier[identifier];
+                            System.Diagnostics.Debug.WriteLine($"Deleting attachment from Redmine: {identifier} (Redmine ID: {redmineAttachmentId})");
+
+                            var deleteRequest = new RestRequest($"{redmineExternalUrl}/attachments/{redmineAttachmentId}.json", Method.DELETE);
+                            deleteRequest.AddHeader("X-Redmine-API-Key", redmineApiKey);
+
+                            var deleteResponse = redmineClient.Execute(deleteRequest);
+
+                            if (deleteResponse.IsSuccessful || deleteResponse.StatusCode == System.Net.HttpStatusCode.NoContent)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"✓ Successfully deleted attachment from Redmine: {identifier}");
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine($"✗ Failed to delete attachment: {deleteResponse.StatusCode} - {deleteResponse.Content}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"✗ Exception deleting attachment: {ex.Message}");
+                        }
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("No attachments need to be deleted from Redmine");
+                }
+
+                // Filter out attachments that already exist
+                var newAttachments = new JArray();
+                foreach (var att in attachments)
+                {
+                    var url = att["url"]?.ToString();
+                    var size = att["size"]?.ToString();
+                    var arcgisGlobalId = att["globalId"]?.ToString();
+
+                    if (string.IsNullOrEmpty(url)) continue;
+
+                    // Use GlobalID and size as unique identifier
+                    // The filename in Redmine will be the attachment ID from ArcGIS URL
+                    var urlParts = url.Split('/');
+                    var attachmentId = urlParts.Length >= 2 ? urlParts[urlParts.Length - 1] : "unknown";
+                    var identifier = $"{attachmentId}:{size}";
+
+                    if (!existingAttachmentIds.Contains(identifier))
+                    {
+                        newAttachments.Add(att);
+                        System.Diagnostics.Debug.WriteLine($"New attachment to upload: {identifier}");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Skipping duplicate attachment: {identifier}");
+                    }
+                }
+
+                if (newAttachments.Count == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"No new attachments to sync (all already exist in Redmine)");
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Uploading {newAttachments.Count} new attachments to Redmine...");
+
+                // Upload only new attachments to Redmine
+                var webhookController = new Controllers.RedmineWebhookController();
+                var uploadedTokens = await webhookController.UploadAttachmentsToRedminePublic(globalId, newAttachments);
+
+                if (uploadedTokens != null && uploadedTokens.Count > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"✓ Uploaded {uploadedTokens.Count} attachments, adding to Redmine issue...");
+
+                    // Update Redmine issue with attachment tokens
+                    var updateRequest = new RestRequest($"{redmineExternalUrl}/issues/{redmineIssueId}.json", Method.PUT);
+                    updateRequest.AddHeader("X-Redmine-API-Key", redmineApiKey);
+                    updateRequest.AddHeader("Content-Type", "application/json");
+
+                    var issueUpdate = new JObject
+                    {
+                        ["issue"] = new JObject
+                        {
+                            ["uploads"] = uploadedTokens,
+                            ["notes"] = $"Attachments synced from .NET at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}"
+                        }
+                    };
+
+                    updateRequest.AddParameter("application/json", issueUpdate.ToString(Newtonsoft.Json.Formatting.None), ParameterType.RequestBody);
+
+                    var updateResponse = redmineClient.Execute(updateRequest);
+
+                    if (updateResponse.IsSuccessful)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"✓ Successfully synced {uploadedTokens.Count} attachments to Redmine issue {redmineIssueId}");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"✗ Failed to update Redmine issue with attachments: {updateResponse.StatusCode}");
+                        System.Diagnostics.Debug.WriteLine($"Response: {updateResponse.Content}");
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"No attachments were uploaded successfully");
+                }
+
+                System.Diagnostics.Debug.WriteLine($"=====================================================================");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"✗ Error syncing attachments to Redmine: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Stack: {ex.StackTrace}");
+            }
         }
     }
 }

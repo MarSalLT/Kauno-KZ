@@ -288,6 +288,68 @@ namespace KZ.Services
                 }
             }
 
+            // Handle attachments if present (for .NET -> Redmine sync)
+            Debug.WriteLine("==================== CHECKING FOR ATTACHMENTS ====================");
+            Debug.WriteLine($"taskData.ContainsKey('attachments'): {taskData.ContainsKey("attachments")}");
+
+            if (taskData.ContainsKey("attachments"))
+            {
+                Debug.WriteLine($"Attachments key found, type: {taskData["attachments"]?.GetType().Name}");
+                Debug.WriteLine($"Attachments value: {taskData["attachments"]}");
+            }
+
+            if (taskData.ContainsKey("attachments") && taskData["attachments"] is JArray)
+            {
+                var attachments = taskData["attachments"] as JArray;
+                Debug.WriteLine($"Found {attachments?.Count ?? 0} attachments to upload to Redmine");
+
+                if (attachments != null && attachments.Count > 0)
+                {
+                    Debug.WriteLine($"Attachment details: {attachments.ToString(Formatting.Indented)}");
+                    try
+                    {
+                        // Upload attachments and get tokens
+                        Debug.WriteLine("Creating RedmineWebhookController instance...");
+                        var controller = new Controllers.RedmineWebhookController();
+
+                        Debug.WriteLine("Calling UploadAttachmentsToRedminePublic...");
+                        var uploadedTokens = await controller.UploadAttachmentsToRedminePublic(normalizedGlobalId, attachments);
+
+                        Debug.WriteLine($"Upload returned {uploadedTokens?.Count ?? 0} tokens");
+
+                        if (uploadedTokens != null && uploadedTokens.Count > 0)
+                        {
+                            Debug.WriteLine($"✓ Successfully uploaded {uploadedTokens.Count} attachments");
+                            Debug.WriteLine($"Tokens: {uploadedTokens.ToString(Formatting.Indented)}");
+                            processVariables["attachmentTokens"] = new { value = uploadedTokens.ToString(Formatting.None), type = "String" };
+                        }
+                        else
+                        {
+                            Debug.WriteLine("✗ No attachment tokens returned from upload");
+                        }
+                    }
+                    catch (Exception attachEx)
+                    {
+                        Debug.WriteLine($"✗ Exception during attachment upload: {attachEx.Message}");
+                        Debug.WriteLine($"Stack trace: {attachEx.StackTrace}");
+                        if (attachEx.InnerException != null)
+                        {
+                            Debug.WriteLine($"Inner exception: {attachEx.InnerException.Message}");
+                        }
+                        // Don't throw - let the main update continue even if attachments fail
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine("Attachments array is null or empty");
+                }
+            }
+            else
+            {
+                Debug.WriteLine("No attachments array found in taskData");
+            }
+            Debug.WriteLine("===============================================================");
+
             var message = new
             {
                 messageName = "TaskUpdate",

@@ -15,7 +15,7 @@
 					>
 						mdi-view-list-outline
 					</v-icon>
-					<span class="caption ml-1">{{((taskStatusCode == '4') && (apprState == 1)) ? "Peržiūrėti visą informaciją" : "Peržiūrėti/Redaguoti visą informaciją"}}</span>
+					<span class="caption ml-1">{{((taskStatusCode == '4' || taskStatusCode == '2') && (apprState == 1)) ? "Peržiūrėti visą informaciją" : "Peržiūrėti/Redaguoti visą informaciją"}}</span>
 				</v-btn>
 			</template>
 			<template v-else>
@@ -51,7 +51,7 @@
 				depressed
 				:color="geomDrawingButtonActive ? 'orange' : null"
 				v-on:click="toggleTaskGeomDrawing"
-				v-if="!((taskStatusCode == '4') && (apprState == 1))"
+				v-if="!((taskStatusCode == '4' || taskStatusCode == '2') && (apprState == 1))"
 			>
 				<v-icon
 					title="Nurodyti aprėptį"
@@ -65,7 +65,7 @@
 				class="mt-2 justify-start"
 				depressed
 				v-on:click="cancelTask"
-				v-if="taskStatusCode != '0' && taskStatusCode != '4' && taskStatusCode != '7'"
+				v-if="taskStatusCode != '0' && taskStatusCode != '4' && taskStatusCode != '7' && taskStatusCode != '2'"
 			>
 				<v-icon
 					title="Atšaukti užduotį"
@@ -404,6 +404,7 @@
 						});
 					} else {
 						this.getTaskData(this.feature).then(function(taskData){
+							console.log(taskData);
 							var taskGlobalId = taskData["GlobalID"];
 							if (action == "approve") {
 								if ((taskData["Statusas"] == "2") && (taskData["Patvirtinimas"] == 1)) {

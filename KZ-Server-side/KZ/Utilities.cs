@@ -34,6 +34,10 @@ namespace KZ
         static public RestClient GetRestClient(string url)
         {
             RestClient client = new RestClient(url);
+
+            // Disable proxy to avoid 10.9.9.50:3000 routing issues on server
+            client.Proxy = null;
+
             if (WebConfigurationManager.AppSettings["SecuredServicesUrlMatchNTLM"] != null && url.Contains(WebConfigurationManager.AppSettings["SecuredServicesUrlMatchNTLM"]))
             {
                 // Taip buvo apsaugoti servisai Vilniaus m.
