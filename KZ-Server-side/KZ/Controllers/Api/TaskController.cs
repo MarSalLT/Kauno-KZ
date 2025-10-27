@@ -8,6 +8,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Threading.Tasks;
 using System.Web;
 using System.Web.Http;
 using System.Web.Http.Description;
@@ -56,12 +57,12 @@ namespace KZ.Controllers.Api
         [HttpPost]
         [Authorize(Roles = "kz-horizontal-edit,kz-infra-edit,kz-vertical-edit,manage-tasks,manage-tasks-test")]
         [ApiExplorerSettings(IgnoreApi = true)]
-        public IHttpActionResult NotifyAboutChangeToTasksSystem(NotifyAboutChangeToTasksSystem model)
+        public async Task<IHttpActionResult> NotifyAboutChangeToTasksSystem(NotifyAboutChangeToTasksSystem model)
         {
             if (model != null && ModelState.IsValid)
             {
                 TasksRepository tasksRepository = new TasksRepository();
-                JObject result = tasksRepository.NotifyAboutChangeToTasksSystem(model);
+                JObject result = await tasksRepository.NotifyAboutChangeToTasksSystem(model);
                 return Ok(result);
             }
             return BadRequest();

@@ -476,7 +476,7 @@ namespace KZ.Data
             return globalId.Replace("{", "").Replace("}", "").ToUpper();
         }
 
-        public JObject NotifyAboutChangeToTasksSystem(NotifyAboutChangeToTasksSystem model)
+        public async Task<JObject> NotifyAboutChangeToTasksSystem(NotifyAboutChangeToTasksSystem model)
         {
             System.Diagnostics.Debug.WriteLine($"NotifyAboutChangeToTasksSystem START");
 
@@ -511,7 +511,7 @@ namespace KZ.Data
                 if (model.ActionType == "delegation")
                 {
                     System.Diagnostics.Debug.WriteLine($"Starting new process for {globalId}");
-                    status = StartCamundaProcess(taskData);
+                    status = await StartCamundaProcess(taskData);
 
                     if (status)
                     {
@@ -645,7 +645,7 @@ namespace KZ.Data
             return result;
         }
 
-        private bool StartCamundaProcess(JObject taskData)
+        private async Task<bool> StartCamundaProcess(JObject taskData)
         {
             try
             {
@@ -728,8 +728,34 @@ namespace KZ.Data
                         JArray attachments = (JArray)attachmentsToken;
                         if (attachments.Count > 0)
                         {
+                            Debug.WriteLine($"Found {attachments.Count} attachments, uploading to Redmine before issue creation...");
+
+                            try
+                            {
+                                // Upload attachments to Redmine and get tokens
+                                var webhookController = new Controllers.RedmineWebhookController();
+                                var uploadedTokens = await webhookController.UploadAttachmentsToRedminePublic(globalId, attachments);
+
+                                if (uploadedTokens != null && uploadedTokens.Count > 0)
+                                {
+                                    Debug.WriteLine($"✓ Successfully uploaded {uploadedTokens.Count} attachments, adding tokens to Camunda variables");
+                                    variables["attachmentTokens"] = new { value = uploadedTokens.ToString(Newtonsoft.Json.Formatting.None), type = "string" };
+                                    variables["attachmentsCount"] = new { value = uploadedTokens.Count.ToString(), type = "string" };
+                                }
+                                else
+                                {
+                                    Debug.WriteLine("✗ No attachment tokens returned from upload");
+                                }
+                            }
+                            catch (Exception attachEx)
+                            {
+                                Debug.WriteLine($"✗ Failed to upload attachments: {attachEx.Message}");
+                                Debug.WriteLine($"Stack: {attachEx.StackTrace}");
+                                // Continue with issue creation even if attachments fail
+                            }
+
+                            // Also keep the raw attachments data for backward compatibility
                             variables["attachments"] = new { value = attachments.ToString(Newtonsoft.Json.Formatting.None), type = "string" };
-                            variables["attachmentsCount"] = new { value = attachments.Count.ToString(), type = "string" };
                         }
                     }
                 }

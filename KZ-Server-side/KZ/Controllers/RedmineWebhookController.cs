@@ -1240,6 +1240,96 @@ namespace KZ.Controllers
                     Debug.WriteLine($"Status mapping: {status} -> {arcgisStatus}");
                 }
 
+                // Extract and map custom fields from Redmine to database columns
+                if (taskData.ContainsKey("custom_fields") && taskData["custom_fields"] is JArray)
+                {
+                    var customFields = taskData["custom_fields"] as JArray;
+                    Debug.WriteLine($"Processing {customFields.Count} custom fields from Redmine");
+
+                    foreach (var field in customFields)
+                    {
+                        var fieldId = field["id"]?.Value<int>() ?? 0;
+                        var valueToken = field["value"];
+
+                        // Skip if value is null or empty
+                        if (valueToken == null || valueToken.Type == JTokenType.Null)
+                            continue;
+
+                        var fieldValue = valueToken.ToString();
+                        if (string.IsNullOrEmpty(fieldValue))
+                            continue;
+
+                        Debug.WriteLine($"Custom field {fieldId}: {fieldValue}");
+
+                        switch (fieldId)
+                        {
+                            case 2: // uzsakovo_email
+                                attributes["uzsakovo_email"] = fieldValue;
+                                break;
+                            case 5: // Adresas
+                                attributes["Adresas"] = fieldValue;
+                                break;
+                            case 6: // X coordinate
+                                if (double.TryParse(fieldValue, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double xCoord))
+                                {
+                                    attributes["X"] = xCoord;
+                                }
+                                break;
+                            case 7: // Y coordinate
+                                if (double.TryParse(fieldValue, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double yCoord))
+                                {
+                                    attributes["Y"] = yCoord;
+                                }
+                                break;
+                            case 8: // URL
+                                attributes["URL"] = fieldValue;
+                                break;
+                            case 9: // Uzduoties_tipas (reverse mapping)
+                                // Map back from Redmine format to database code
+                                string tipasCode = fieldValue;
+                                // Handle both em-dash (–) and hyphen (-) separators
+                                if (fieldValue.Contains(" – "))
+                                {
+                                    tipasCode = fieldValue.Split(new[] { " – " }, StringSplitOptions.None)[0];
+                                }
+                                else if (fieldValue.Contains(" - "))
+                                {
+                                    tipasCode = fieldValue.Split(new[] { " - " }, StringSplitOptions.None)[0];
+                                }
+                                attributes["Uzduoties_tipas"] = tipasCode;
+                                Debug.WriteLine($"Uzduoties_tipas: {fieldValue} -> {tipasCode}");
+                                break;
+                            case 10: // Teritorija (reverse mapping)
+                                // Map back from Redmine format to database code
+                                string teritorijaCode = fieldValue;
+                                if (fieldValue.Contains(" - "))
+                                {
+                                    teritorijaCode = fieldValue.Split(new[] { " - " }, StringSplitOptions.None)[0];
+                                }
+                                attributes["Teritorija"] = teritorijaCode;
+                                break;
+                        }
+                    }
+                }
+
+                // Map priority from Redmine to database
+                if (taskData.ContainsKey("priorityId") && taskData["priorityId"] != null)
+                {
+                    int priorityId = Convert.ToInt32(taskData["priorityId"]);
+                    string svarba = "medium";
+
+                    switch (priorityId)
+                    {
+                        case 1: svarba = "low"; break;
+                        case 2: svarba = "medium"; break;
+                        case 3: svarba = "high"; break;
+                        case 5: svarba = "emergency"; break;
+                    }
+
+                    attributes["Svarba"] = svarba;
+                    Debug.WriteLine($"Priority mapping: {priorityId} -> {svarba}");
+                }
+
                 featureUpdate["attributes"] = attributes;
                 updatesArray.Add(featureUpdate);
                 layerEdit["updates"] = updatesArray;
@@ -1306,6 +1396,55 @@ namespace KZ.Controllers
                                 {
                                     sqlParts.Add("Statusas = @statusas");
                                     parameters.Parameters.AddWithValue("@statusas", attributes["Statusas"]);
+                                }
+
+                                // Add custom field mappings to SQL update
+                                if (attributes.ContainsKey("uzsakovo_email"))
+                                {
+                                    sqlParts.Add("uzsakovo_email = @uzsakovo_email");
+                                    parameters.Parameters.AddWithValue("@uzsakovo_email", attributes["uzsakovo_email"].ToString());
+                                }
+
+                                if (attributes.ContainsKey("Adresas"))
+                                {
+                                    sqlParts.Add("Adresas = @adresas");
+                                    parameters.Parameters.AddWithValue("@adresas", attributes["Adresas"].ToString());
+                                }
+
+                                if (attributes.ContainsKey("X"))
+                                {
+                                    sqlParts.Add("X = @x");
+                                    parameters.Parameters.AddWithValue("@x", attributes["X"]);
+                                }
+
+                                if (attributes.ContainsKey("Y"))
+                                {
+                                    sqlParts.Add("Y = @y");
+                                    parameters.Parameters.AddWithValue("@y", attributes["Y"]);
+                                }
+
+                                if (attributes.ContainsKey("URL"))
+                                {
+                                    sqlParts.Add("URL = @url");
+                                    parameters.Parameters.AddWithValue("@url", attributes["URL"].ToString());
+                                }
+
+                                if (attributes.ContainsKey("Uzduoties_tipas"))
+                                {
+                                    sqlParts.Add("Uzduoties_tipas = @uzduoties_tipas");
+                                    parameters.Parameters.AddWithValue("@uzduoties_tipas", attributes["Uzduoties_tipas"].ToString());
+                                }
+
+                                if (attributes.ContainsKey("Teritorija"))
+                                {
+                                    sqlParts.Add("Teritorija = @teritorija");
+                                    parameters.Parameters.AddWithValue("@teritorija", attributes["Teritorija"].ToString());
+                                }
+
+                                if (attributes.ContainsKey("Svarba"))
+                                {
+                                    sqlParts.Add("Svarba = @svarba");
+                                    parameters.Parameters.AddWithValue("@svarba", attributes["Svarba"].ToString());
                                 }
 
                                 if (sqlParts.Count > 0)
